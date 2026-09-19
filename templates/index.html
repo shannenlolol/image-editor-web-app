@@ -117,10 +117,11 @@
         <!-- Include the Cropper JS file -->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.9/cropper.min.js"></script>
         <script>
-            let cropper;
+            let cropper = null;
             let originalImage = null;
-            let originalImageUrl = null;
-            let originalImageWithBgUrl = null;
+            let imageRequestId = 0;
+            let imageAbortController = null;
+            let displayedImageUrl = null;
             let currentFileName = '';
             const imageElement = document.getElementById('image');
             const inputElement = document.getElementById('imageInput');
@@ -166,6 +167,7 @@
             }
 
             function initCropper(width = null, height = null) {
+                const requestId = imageRequestId;
                 if (cropper) {
                     cropper.destroy();
                 }
@@ -202,6 +204,7 @@
                     minZoom: 0.01, // Allow zooming out to 1% of original size
                     maxZoom: 100, // Allow zooming in to 10000% of original size
                     ready: function () {
+                        if (requestId !== imageRequestId || !cropper) return;
                         const cropBox = document.querySelector('.cropper-crop-box');
                         if (cropBox) {
                             cropBox.style.cursor = 'move';
@@ -231,6 +234,7 @@
 
                             // Center the view
                             setTimeout(() => {
+                                if (requestId !== imageRequestId) return;
                                 container.scrollLeft = (container.scrollWidth - container.clientWidth) / 2;
                                 container.scrollTop = (container.scrollHeight - container.clientHeight) / 2;
                             }, 100);
@@ -256,34 +260,68 @@
                 });
             }
 
+            function invalidateImageProcessing() {
+                imageRequestId += 1;
+                if (imageAbortController) {
+                    imageAbortController.abort();
+                    imageAbortController = null;
+                }
+                // Do not leave the previous image available under a new filename.
+                if (cropper) {
+                    cropper.destroy();
+                    cropper = null;
+                }
+                imageElement.removeAttribute('src');
+                imageElement.style.display = 'none';
+                if (displayedImageUrl) {
+                    URL.revokeObjectURL(displayedImageUrl);
+                    displayedImageUrl = null;
+                }
+            }
+
             async function processImage(file, shouldRemoveBg = true) {
+                invalidateImageProcessing();
+                const requestId = imageRequestId;
+                const controller = new AbortController();
+                imageAbortController = controller;
+                let url = null;
                 showLoading();
 
                 try {
+                    let blob = file;
                     if (shouldRemoveBg) {
                         const formData = new FormData();
                         formData.append('file', file);
                         const response = await fetch('/remove-bg', {
                             method: 'POST',
                             body: formData,
+                            signal: controller.signal,
                         });
-                        const blob = await response.blob();
-                        originalImageUrl = URL.createObjectURL(blob);
-                        imageElement.src = originalImageUrl;
-                    } else {
-                        const url = URL.createObjectURL(file);
-                        originalImageWithBgUrl = url;
-                        imageElement.src = url;
+                        if (requestId !== imageRequestId) return;
+                        blob = await response.blob();
                     }
+                    if (requestId !== imageRequestId) return;
 
-                    imageElement.onload = () => {
-                        hideLoading();
-                        initCropper();
-                    };
+                    // Decode separately so an old image-load event cannot update the editor.
+                    url = URL.createObjectURL(blob);
+                    const preview = new Image();
+                    preview.src = url;
+                    await preview.decode();
+                    if (requestId !== imageRequestId) return;
+
+                    imageElement.src = url;
+                    displayedImageUrl = url;
+                    initCropper();
                 } catch (error) {
+                    if (requestId !== imageRequestId || error.name === 'AbortError') return;
                     console.error('Error:', error);
                     alert('Error processing image. Please try again.');
-                    hideLoading();
+                } finally {
+                    if (url && url !== displayedImageUrl) URL.revokeObjectURL(url);
+                    if (requestId === imageRequestId) {
+                        imageAbortController = null;
+                        hideLoading();
+                    }
                 }
             }
 
@@ -371,16 +409,15 @@
                 removeBtn.onclick = (e) => {
                     e.stopPropagation();
                     thumbnail.remove();
-                    if (batchContainer.children.length === 0) {
-                        // If no images left, show upload placeholder
+                    if (originalImage === file || batchContainer.children.length === 0) {
+                        invalidateImageProcessing();
+                        hideLoading();
                         document.getElementById('uploadPlaceholder').style.display = 'flex';
-                        document.getElementById('image').style.display = 'none';
-                        if (cropper) {
-                            cropper.destroy();
-                            cropper = null;
-                        }
                         originalImage = null;
                         currentFileName = '';
+                        if (batchContainer.firstElementChild) {
+                            batchContainer.firstElementChild.click();
+                        }
                     }
                 };
 
@@ -480,6 +517,10 @@
 
             document.getElementById('cropButton').addEventListener('click', function () {
                 if (cropper) {
+                    const requestId = imageRequestId;
+                    const fileName = currentFileName ?
+                        `edited_${currentFileName.replace(/\.[^/.]+$/, '')}.png` :
+                        'edited.png';
                     const width = parseInt(widthInput.value) || null;
                     const height = parseInt(heightInput.value) || null;
 
@@ -527,10 +568,8 @@
 
                     // Convert canvas to blob and send to server
                     canvas.toBlob(function (blob) {
+                        if (requestId !== imageRequestId) return;
                         const formData = new FormData();
-                        const fileName = currentFileName ?
-                            `edited_${currentFileName.replace(/\.[^/.]+$/, '')}.png` :
-                            'edited.png';
                         formData.append('editedImage', blob, fileName);
 
                         // Show loading overlay while processing
@@ -542,7 +581,7 @@
                         })
                             .then(response => response.blob())
                             .then(blob => {
-                                hideLoading();
+                                if (requestId === imageRequestId) hideLoading();
                                 const url = URL.createObjectURL(blob);
                                 const a = document.createElement('a');
                                 a.href = url;
@@ -553,6 +592,7 @@
                                 document.body.removeChild(a);
                             })
                             .catch(error => {
+                                if (requestId !== imageRequestId) return;
                                 hideLoading();
                                 console.error('Error:', error);
                                 alert('Error downloading the edited image. Please try again.');
