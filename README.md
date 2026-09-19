@@ -64,6 +64,18 @@ python app.py
 http://localhost:5000
 ```
 
+## Frontend regression tests
+
+With Node.js 18 or newer installed, run:
+
+```bash
+node --test tests/*.test.cjs
+```
+
+These tests exercise the editor script with controlled network responses and image
+decoding to check image switching, background-removal toggles, removal, and export
+races. They do not require Flask or a background-removal model.
+
 ## Technologies Used
 
 - Python
