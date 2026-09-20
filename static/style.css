@@ -1,8 +1,14 @@
+html,
+body {
+  height: 100%;
+}
+
 body {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   margin: 0;
   padding: 0;
   background-color: #f5f5f5;
+  overflow: hidden;
 }
 
 .navbar {
@@ -35,13 +41,15 @@ body {
 
 .image-container {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   position: relative;
   background: repeating-conic-gradient(#ffffff 0% 25%, #e8e8e8 0% 50%) 50% /
     20px 20px;
   border-radius: 10px;
   overflow: auto;
   border: 2px dashed #ddd;
-  min-height: 400px;
 }
 
 #image {
@@ -65,6 +73,9 @@ body {
 }
 
 .upload-content {
+  max-width: 100%;
+  padding: 20px;
+  box-sizing: border-box;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -236,7 +247,7 @@ body {
   color: #666;
   font-size: 18px;
   margin: 0;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /* Cropper styles */
@@ -282,7 +293,7 @@ body {
   opacity: 0.8 !important;
 }
 
-/* Zoom controls */
+/* Overlay the fixed viewport, not the image content that scrolls inside it. */
 .zoom-controls {
   position: absolute;
   bottom: 20px;
@@ -295,10 +306,6 @@ body {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
   z-index: 900;
   backdrop-filter: blur(5px);
-  margin-right: 12px;
-  /* Account for scrollbar width */
-  margin-bottom: 12px;
-  /* Account for scrollbar height */
 }
 
 .zoom-controls button {
@@ -464,15 +471,6 @@ body {
   object-fit: contain;
 }
 
-/* Ensure image container never exceeds the screen */
-.image-container {
-  flex: 1;
-  min-height: 250px;
-  max-height: 70vh;
-  box-sizing: border-box;
-  overflow: auto;
-}
-
 /* Responsive layout for new action buttons container */
 .nav-actions {
   display: flex;
@@ -493,21 +491,12 @@ body {
   border-radius: 4px;
 }
 
-.page-wrapper {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.navbar,
-.nav-actions {
-  flex-shrink: 0;
-}
-
+/* Let the header take its natural height and give both panels the remainder. */
 .page-wrapper {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
 }
 
 .navbar,
@@ -520,19 +509,15 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   position: relative;
-}
-
-.page-wrapper {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
+  isolation: isolate;
 }
 
 .sidebar {
   flex: 0 0 300px;
-  max-height: 100%;
+  min-height: 0;
   overflow-y: auto;
   box-sizing: border-box;
   background: white;
@@ -543,23 +528,12 @@ body {
 .main-container {
   flex: 1;
   display: flex;
+  align-items: stretch;
+  min-height: 0;
   gap: 20px;
   padding: 0 20px 20px;
   box-sizing: border-box;
-  height: calc(100vh - 160px); /* adjust if nav+buttons > 160px */
   overflow: hidden;
-}
-html {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.page-wrapper {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
 }
 
 .resolution-input {
@@ -659,18 +633,32 @@ html {
 }
 
 @media (max-width: 768px) {
-  html {
+  html,
+  body {
     height: auto;
     overflow: auto;
   }
+  .page-wrapper {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
   .main-container {
+    flex: none;
     flex-direction: column;
     padding: 10px;
-    height: auto;
+    overflow: visible;
+  }
+
+  .editor-section {
+    flex: none;
+    /* A usable canvas above the settings, with normal page scrolling. */
+    height: clamp(250px, 55vh, 640px);
+    height: clamp(250px, 55svh, 640px);
   }
 
   .sidebar {
-    max-height: none;
+    flex: none;
     overflow: visible;
     width: 100%;
   }
