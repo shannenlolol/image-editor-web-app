@@ -61,6 +61,15 @@ function editor() {
                 this.children.some((child) => child.contains(target))
             );
         }
+        querySelectorAll() {
+            return [];
+        }
+        get clientWidth() {
+            return 800;
+        }
+        get clientHeight() {
+            return 600;
+        }
         get firstElementChild() {
             return this.children[0];
         }
@@ -83,6 +92,7 @@ function editor() {
         canvases = [];
     const urls = new Map(),
         revoked = new Set();
+    const downloads = [];
     let nextUrl = 0;
     let resizeCanvas;
     const urlAPI = {
@@ -103,13 +113,24 @@ function editor() {
             querySelectorAll: () => [],
             createElement: (tag) => {
                 const element = new Element();
+                if (tag === 'a')
+                    element.click = () =>
+                        downloads.push({
+                            filename: element.download,
+                            blob: urls.get(element.href),
+                        });
                 if (tag === 'canvas') {
                     canvases.push(element);
                     element.getContext = () => ({
                         fillRect() {},
-                        drawImage() {},
+                        drawImage(source) {
+                            element.renderedFrom = source;
+                        },
                     });
-                    element.toBlob = (callback) => exports.push(callback);
+                    element.toBlob = (callback) =>
+                        exports.push(
+                            Object.assign(callback, { canvas: element }),
+                        );
                 }
                 return element;
             },
@@ -135,8 +156,15 @@ function editor() {
             constructor(image, options) {
                 this.src = image.src;
                 this.options = options;
-                this.ready = true;
+                this.ready = false;
+                this.data = { width: 640, height: 480 };
                 croppers.push(this);
+                queueMicrotask(() => {
+                    if (!this.destroyed) {
+                        this.ready = true;
+                        options.ready();
+                    }
+                });
             }
             destroy() {
                 this.destroyed = true;
@@ -161,10 +189,35 @@ function editor() {
                 this.verticalScale = value;
             }
             getData() {
-                return { width: 640, height: 480 };
+                return {
+                    ...this.data,
+                    rotate: this.rotation || 0,
+                    scaleX: this.horizontalScale || 1,
+                    scaleY: this.verticalScale || 1,
+                };
             }
-            getCroppedCanvas() {
-                return { toBlob: (callback) => exports.push(callback) };
+            setData(data) {
+                this.data = { ...data };
+                this.rotation = data.rotate;
+                this.horizontalScale = data.scaleX;
+                this.verticalScale = data.scaleY;
+            }
+            getImageData() {
+                return { naturalWidth: 640, naturalHeight: 480 };
+            }
+            zoomTo(value) {
+                this.zoomLevel = value;
+            }
+            zoom(value) {
+                this.zoomLevel = (this.zoomLevel || 0) + value;
+            }
+            getCroppedCanvas(options) {
+                return {
+                    source: urls.get(this.src).name,
+                    data: this.getData(),
+                    options,
+                    toBlob: (callback) => exports.push(callback),
+                };
             }
         },
         FormData: class {
@@ -175,6 +228,9 @@ function editor() {
                 this.entries.set(key, { value, filename });
             }
         },
+        Blob,
+        ArrayBuffer,
+        Uint8Array,
         AbortController,
         Event,
         URL: urlAPI,
@@ -187,6 +243,7 @@ function editor() {
         alert: (message) => alerts.push(message),
         console: { error() {} },
         setTimeout,
+        setImmediate,
     });
     for (const script of scripts)
         vm.runInContext(script.source, context, { filename: script.filename });
@@ -200,7 +257,7 @@ function editor() {
         element('removeBg').dispatchEvent(new Event('change'));
     }
     async function respond(request, blob) {
-        request.resolve({ blob: () => Promise.resolve(blob) });
+        request.resolve({ ok: true, blob: () => Promise.resolve(blob) });
         await flush();
     }
     async function decode(task = decodes.at(-1)) {
@@ -208,6 +265,8 @@ function editor() {
         await flush();
     }
     return {
+        upload: (files) => context.window.ImageEditor.handleFiles(files),
+        download: (all) => context.window.ImageEditor.downloadImages(all),
         element,
         select,
         toggle,
@@ -220,12 +279,8 @@ function editor() {
         alerts,
         revoked,
         canvases,
+        downloads,
         resizeCanvas: () => resizeCanvas(),
-        applyImageTransform: () => {
-            const api = context.window.ImageEditor;
-            api.cropper.rotateTo(api.rotationAngle);
-            api.cropper.scale(api.horizontalScale, api.verticalScale);
-        },
         visibleImage: () => urls.get(element('image').src),
         filename: () => context.window.ImageEditor.selectedFileName,
         cropper: () => context.window.ImageEditor.cropper,
@@ -267,7 +322,7 @@ test('a delayed response body cannot replace a newer completed selection', async
     const e = editor(),
         body = deferred();
     e.select({ name: 'A.png' });
-    e.requests[0].resolve({ blob: () => body.promise });
+    e.requests[0].resolve({ ok: true, blob: () => body.promise });
     await flush();
     const b = { name: 'B.png' };
     e.select(b, false);
@@ -360,39 +415,28 @@ test('the previous image cannot be exported while a new selection is processing'
     await e.decode();
     const previous = e.cropper();
     e.select({ name: 'B.png' });
-    e.element('downloadMenuButton').click();
+    e.element('downloadCurrent').click();
     assert.equal(previous.destroyed, true);
     assert.equal(e.exports.length, 0);
 });
 
-test('a pending canvas export is discarded after selecting another image', async () => {
+test('a current-image download keeps its snapshot when the user selects another image', async () => {
     const e = editor();
     e.select({ name: 'A.png' }, false);
     await e.decode();
-    e.element('downloadMenuButton').click();
+    e.element('downloadCurrent').click();
     e.select({ name: 'B.png' });
-    e.exports[0]({ name: 'A export' });
+    const blob = new Blob(['A export']);
+    e.exports[0](blob);
+    await flush();
+    assert.equal(e.downloads[0].filename, 'edited_A.png');
+    assert.equal(e.downloads[0].blob, blob);
+    assert.equal(e.loading(), true);
+    assert.equal(e.filename(), 'B.png');
     assert.equal(
         e.requests.filter((r) => r.url === '/upload-edited').length,
         0,
     );
-});
-
-test('a previous download cannot clear loading for a newly selected image', async () => {
-    const e = editor();
-    e.select({ name: 'A.jpg' }, false);
-    await e.decode();
-    e.element('downloadMenuButton').click();
-    e.exports[0]({ name: 'A export' });
-    const download = e.requests[0];
-    assert.equal(
-        download.options.body.entries.get('editedImage').filename,
-        'edited_A.png',
-    );
-    e.select({ name: 'B.png' });
-    await e.respond(download, { name: 'A download' });
-    assert.equal(e.loading(), true);
-    assert.equal(e.filename(), 'B.png');
 });
 
 test('switching and collapsing tools preserves the active cropper and edits', async () => {
@@ -578,9 +622,11 @@ test('fixed presets synchronize output fields and exported canvas with the new c
         assert.equal(e.element('heightInput').value, String(height));
         assert.equal(preset.value, value);
         assert.equal(cropper.options.aspectRatio, Number(value));
-        e.element('downloadMenuButton').click();
+        e.element('downloadCurrent').click();
         assert.equal(e.canvases.at(-1).width, width);
         assert.equal(e.canvases.at(-1).height, height);
+        e.exports.at(-1)(new Blob(['png']));
+        await flush();
     }
     assert.equal(e.cropper(), cropper);
     assert.equal(cropper.destroyed, undefined);
@@ -752,14 +798,12 @@ test('flip controls toggle independently and background reprocessing preserves t
     e.toggle(true);
     await e.respond(e.requests[0], { name: 'cutout' });
     await e.decode();
-    e.applyImageTransform();
     assert.equal(e.cropper().rotation, 90);
     assert.equal(e.cropper().horizontalScale, 1);
     assert.equal(e.cropper().verticalScale, -1);
     e.element('resetButton').click();
     await e.respond(e.requests[1], { name: 'reset' });
     await e.decode();
-    e.applyImageTransform();
     assert.equal(e.cropper().rotation, 0);
     assert.equal(e.cropper().verticalScale, 1);
     assert.equal(e.element('rotationAngle').value, '0');
@@ -774,7 +818,145 @@ test('rotations wrap within the slider range and a new image starts untransforme
     assert.equal(e.cropper().rotation, -90);
     e.select({ name: 'B.png' }, false);
     await e.decode();
-    e.applyImageTransform();
     assert.equal(e.cropper().rotation, 0);
     assert.equal(e.element('rotationSlider').value, '0');
+});
+
+const JSZip = require('../static/vendor/jszip.min.js');
+const imageFile = (name, contents = 'original bytes') =>
+    Object.assign(new Blob([contents], { type: 'image/png' }), { name });
+
+async function encodeExport(e, index) {
+    const { canvas } = e.exports[index];
+    const payload = JSON.stringify({
+        width: canvas.width,
+        height: canvas.height,
+        ...canvas.renderedFrom,
+    });
+    e.exports[index](new Blob([payload], { type: 'image/png' }));
+    await flush();
+}
+
+test('switching images restores each image’s dimensions, crop, rotation, flip, and background', async () => {
+    const e = editor();
+    e.select(imageFile('A.png'), false);
+    await e.decode();
+    e.element('widthInput').value = '300';
+    e.element('heightInput').value = '200';
+    e.element('widthInput').dispatchEvent(new Event('input'));
+    e.element('rotateRight').click();
+    e.element('flipHorizontal').click();
+    e.element('blackBg').click();
+    e.cropper().data = { x: 17, y: 29, width: 300, height: 200 };
+    e.select(imageFile('B.png'), false);
+    await e.decode();
+    e.element('whiteBg').click();
+    e.element('batchImages').children[0].click();
+    await e.decode();
+    assert.equal(e.element('widthInput').value, '300');
+    assert.equal(e.element('heightInput').value, '200');
+    assert.equal(e.element('rotationAngle').value, '90');
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.cropper().horizontalScale, -1);
+    assert.equal(e.cropper().options.fillColor, '#000000');
+    assert.equal(e.element('blackBg')['aria-pressed'], 'true');
+    assert.equal(e.cropper().getData().x, 17);
+    assert.equal(e.cropper().getData().y, 29);
+});
+
+test('ZIP contains per-image edits, unique filenames, and untouched original files', async () => {
+    const e = editor();
+    const original = imageFile('original.png', 'untouched image');
+    e.element('removeBg').checked = false;
+    e.upload([imageFile('same.png'), original]);
+    await e.decode();
+    e.element('widthInput').value = '300';
+    e.element('heightInput').value = '200';
+    e.element('widthInput').dispatchEvent(new Event('input'));
+    e.element('blackBg').click();
+    e.element('rotateRight').click();
+    e.select(imageFile('same.png'), false);
+    await e.decode();
+    e.element('whiteBg').click();
+    const active = e.cropper();
+    const pending = e.download(true);
+    assert.equal(e.element('downloadMenuButton').disabled, true);
+    await encodeExport(e, 0);
+    await encodeExport(e, 1);
+    await pending;
+    assert.equal(
+        e.downloads.length,
+        1,
+        e.element('downloadStatus').textContent,
+    );
+    assert.equal(e.downloads[0].filename, 'edited_images.zip');
+    const zip = await JSZip.loadAsync(await e.downloads[0].blob.arrayBuffer());
+    assert.deepEqual(Object.keys(zip.files), [
+        'edited_same.png',
+        'original.png',
+        'edited_same (2).png',
+    ]);
+    const first = JSON.parse(await zip.file('edited_same.png').async('string'));
+    const second = JSON.parse(
+        await zip.file('edited_same (2).png').async('string'),
+    );
+    assert.equal(first.width, 300);
+    assert.equal(first.height, 200);
+    assert.equal(first.options.fillColor, '#000000');
+    assert.equal(first.data.rotate, 90);
+    assert.equal(second.width, 640);
+    assert.equal(second.options.fillColor, '#ffffff');
+    assert.equal(second.data.rotate, 0);
+    assert.equal(
+        await zip.file('original.png').async('string'),
+        'untouched image',
+    );
+    assert.equal(e.cropper(), active);
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+});
+
+test('ZIP export is a snapshot and ignores duplicate submissions and later batch mutations', async () => {
+    const e = editor();
+    e.element('removeBg').checked = false;
+    e.upload([imageFile('A.png'), imageFile('B.png', 'B original')]);
+    await e.decode();
+    const pending = e.download(true);
+    await e.download(true);
+    assert.equal(e.exports.length, 1);
+    e.remove(1);
+    e.select(imageFile('C.png'), false);
+    await e.decode();
+    await encodeExport(e, 0);
+    await pending;
+    const zip = await JSZip.loadAsync(await e.downloads[0].blob.arrayBuffer());
+    assert.deepEqual(Object.keys(zip.files), ['edited_A.png', 'B.png']);
+    assert.equal(e.filename(), 'C.png');
+});
+
+test('failed or incomplete exports report an error and never download a partial archive', async () => {
+    const e = editor();
+    await e.download(true);
+    assert.equal(e.exports.length, 0);
+    e.select(imageFile('A.png'), false);
+    await e.decode();
+    const pending = e.download(true);
+    e.exports[0](null);
+    await pending;
+    assert.equal(e.downloads.length, 0);
+    assert.match(e.element('downloadStatus').textContent, /encode/);
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+    e.element('widthInput').value = '';
+    await e.download(true);
+    assert.equal(e.downloads.length, 0);
+    assert.match(e.element('downloadStatus').textContent, /valid dimensions/);
+});
+
+test('a batch with interrupted background processing cannot silently export the original', async () => {
+    const e = editor();
+    e.select(imageFile('unfinished.png'));
+    e.select(imageFile('ready.png'), false);
+    await e.decode();
+    await e.download(true);
+    assert.equal(e.downloads.length, 0);
+    assert.match(e.element('downloadStatus').textContent, /unfinished.png/);
 });

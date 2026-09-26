@@ -1161,3 +1161,52 @@ input:focus-visible {
 .tool-controls:disabled input {
   cursor: default;
 }
+
+/* Download actions share the preset menu's anchored presentation. */
+.download-control {
+  position: relative;
+}
+.download-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 224px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  box-sizing: border-box;
+  border: 1px solid #e2e6ea;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  z-index: 30;
+}
+.download-menu button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: white;
+  color: #2c3e50;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.download-menu button:hover,
+.download-menu button:focus-visible {
+  background: #f0f4f8;
+}
+.download-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.download-status {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 20px;
+  color: #2c3e50;
+  background: #edf4fc;
+  font-size: 13px;
+}

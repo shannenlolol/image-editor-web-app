@@ -3,6 +3,8 @@ window.ImageEditor = (() => {
     'use strict';
 
     let controls;
+    const imageRecords = new Map();
+    let exportBusy = false;
     let cropper = null;
     let selectedFile = null;
     let imageRequestId = 0;
@@ -32,7 +34,7 @@ window.ImageEditor = (() => {
         loadingOverlay.style.display = 'none';
     }
 
-    function initCropper() {
+    function initCropper(record) {
         const requestId = imageRequestId;
         if (cropper) {
             cropper.destroy();
@@ -52,7 +54,7 @@ window.ImageEditor = (() => {
 
         const options = {
             aspectRatio: ratio,
-            viewMode: 0, // Changed back to viewMode 0 for completely free movement
+            viewMode: 0,
             autoCropArea: 1,
             background: true,
             responsive: true,
@@ -81,6 +83,7 @@ window.ImageEditor = (() => {
             ready: function () {
                 if (requestId !== imageRequestId || !cropper) return;
                 controls.applyImageTransform();
+                record.status = 'ready';
                 controls.setToolControlsDisabled(false);
                 controls.updateBackgroundColor(selectedBackground);
                 const cropBox = document.querySelector('.cropper-crop-box');
@@ -120,29 +123,27 @@ window.ImageEditor = (() => {
                             2;
                     }, 100);
                 }
+                if (record.cropData) cropper.setData(record.cropData);
+                controls.updateDownloadState();
             },
         };
 
         cropper = new Cropper(previewImage, options);
-
-        // Remove existing event listeners before adding new ones
-        const zoomIn = document.getElementById('zoomIn');
-        const zoomOut = document.getElementById('zoomOut');
-
-        zoomIn.removeEventListener('click', null);
-        zoomOut.removeEventListener('click', null);
-
-        zoomIn.addEventListener('click', () => {
-            if (cropper) cropper.zoom(0.1);
-        });
-
-        zoomOut.addEventListener('click', () => {
-            if (cropper) cropper.zoom(-0.1);
-        });
     }
+
+    // Register zoom handlers once, independent of cropper recreation.
+    document.getElementById('zoomIn').addEventListener('click', () => {
+        if (cropper && cropper.ready) cropper.zoom(0.1);
+    });
+    document.getElementById('zoomOut').addEventListener('click', () => {
+        if (cropper && cropper.ready) cropper.zoom(-0.1);
+    });
 
     function invalidateImageProcessing() {
         controls.setToolControlsDisabled(true);
+        const previous = imageRecords.get(selectedFile);
+        if (previous && previous.status === 'loading')
+            previous.status = 'interrupted';
         imageRequestId += 1;
         if (imageAbortController) {
             imageAbortController.abort();
@@ -153,6 +154,7 @@ window.ImageEditor = (() => {
             cropper.destroy();
             cropper = null;
         }
+        controls.updateDownloadState();
         previewImage.removeAttribute('src');
         previewImage.style.display = 'none';
         if (displayedImageUrl) {
@@ -166,7 +168,14 @@ window.ImageEditor = (() => {
         shouldRemoveBg = true,
         resetEdits = true,
     ) {
+        if (!resetEdits) saveCurrentImage();
         invalidateImageProcessing();
+        const record = imageRecords.get(file);
+        record.status = 'loading';
+        record.removeBackground = shouldRemoveBg;
+        record.savedCanvas = null;
+        record.exportError = null;
+        if (resetEdits) record.cropData = null;
         const requestId = imageRequestId;
         const controller = new AbortController();
         imageAbortController = controller;
@@ -184,6 +193,7 @@ window.ImageEditor = (() => {
                     signal: controller.signal,
                 });
                 if (requestId !== imageRequestId) return;
+                if (!response.ok) throw new Error('Background removal failed.');
                 blob = await response.blob();
             }
             if (requestId !== imageRequestId) return;
@@ -208,10 +218,13 @@ window.ImageEditor = (() => {
             }
             previewImage.src = url;
             displayedImageUrl = url;
-            initCropper();
+            initCropper(record);
+            if (cropper.ready) record.status = 'ready';
+            controls.updateDownloadState();
         } catch (error) {
             if (requestId !== imageRequestId || error.name === 'AbortError')
                 return;
+            record.status = 'error';
             console.error('Error:', error);
             alert('Error processing image. Please try again.');
         } finally {
@@ -219,6 +232,7 @@ window.ImageEditor = (() => {
             if (requestId === imageRequestId) {
                 imageAbortController = null;
                 hideLoading();
+                controls.updateDownloadState();
             }
         }
     }
@@ -246,19 +260,88 @@ window.ImageEditor = (() => {
     });
 
     function handleFiles(files) {
-        files.forEach((file, index) => {
-            // Process the first file immediately
-            if (index === 0) {
-                selectedFile = file; // Store the original file
-                selectedFileName = file.name; // Store the current file name
-                document.getElementById('uploadPlaceholder').style.display =
-                    'none';
-                document.getElementById('image').style.display = 'block';
-                processSelectedImage(file, removeBgCheckbox.checked);
-            }
-            // Add all files to batch images
+        if (!files.length) return;
+        const defaults = {
+            removeBackground: removeBgCheckbox.checked,
+            background: selectedBackground,
+        };
+        files.forEach((file) => {
+            imageRecords.set(file, {
+                file,
+                status: 'unvisited',
+                settings: null,
+                savedCanvas: null,
+            });
             addToBatchImages(file);
         });
+        selectFile(files[0], defaults);
+    }
+
+    function selectFile(file, defaults = null) {
+        if (file === selectedFile && cropper && cropper.ready) return;
+        saveCurrentImage();
+        invalidateImageProcessing();
+        selectedFile = file;
+        selectedFileName = file.name;
+        const record = imageRecords.get(file);
+        if (record.settings) restoreImageSettings(record.settings);
+        else {
+            removeBgCheckbox.checked = defaults
+                ? defaults.removeBackground
+                : Boolean(record.removeBackground);
+            selectedBackground = defaults ? defaults.background : 'transparent';
+            controls.syncBackgroundControls();
+        }
+        updateSelectedThumbnail();
+        uploadPlaceholder.style.display = 'none';
+        processSelectedImage(file, removeBgCheckbox.checked, !record.settings);
+    }
+
+    function captureImageSettings() {
+        return {
+            width: widthInput.value,
+            height: heightInput.value,
+            preset: document.getElementById('aspectRatioPreset').value,
+            sourceDimensions,
+            removeBackground: removeBgCheckbox.checked,
+            background: selectedBackground,
+            customColor: bgColorInput.value,
+            rotation: rotationAngle,
+            horizontalScale,
+            verticalScale,
+        };
+    }
+
+    function restoreImageSettings(settings) {
+        widthInput.value = settings.width;
+        heightInput.value = settings.height;
+        document.getElementById('aspectRatioPreset').value = settings.preset;
+        sourceDimensions = settings.sourceDimensions;
+        removeBgCheckbox.checked = settings.removeBackground;
+        selectedBackground = settings.background;
+        bgColorInput.value = settings.customColor;
+        rotationAngle = settings.rotation;
+        horizontalScale = settings.horizontalScale;
+        verticalScale = settings.verticalScale;
+        controls.syncPresetMenu();
+        controls.syncRotationControls();
+        controls.syncBackgroundControls();
+    }
+
+    // Capture pixels before destroying the cropper. An inactive image's canvas is immutable,
+    // so ZIP creation can use it without changing the visible editor or replaying edits.
+    function saveCurrentImage() {
+        const record = imageRecords.get(selectedFile);
+        if (!record || !cropper || !cropper.ready) return;
+        record.settings = captureImageSettings();
+        record.cropData = { ...cropper.getData() };
+        try {
+            record.savedCanvas = createExportCanvas(cropper, record.settings);
+            record.exportError = null;
+        } catch (error) {
+            record.savedCanvas = null;
+            record.exportError = error;
+        }
     }
 
     function updateBatchEmptyState() {
@@ -266,6 +349,7 @@ window.ImageEditor = (() => {
             document.getElementById('batchImages').children.length === 0;
         document.getElementById('batchEmptyState').hidden = !isEmpty;
         document.getElementById('batchImages').hidden = isEmpty;
+        if (controls) controls.updateDownloadState();
     }
 
     function updateSelectedThumbnail() {
@@ -308,9 +392,13 @@ window.ImageEditor = (() => {
         removeButton.onclick = (e) => {
             e.stopPropagation();
             thumbnail.remove();
+            imageRecords.delete(file);
             URL.revokeObjectURL(thumbnailImage.src);
             updateBatchEmptyState();
-            if (selectedFile === file || batchContainer.children.length === 0) {
+            if (
+                selectedFile === file ||
+                batchContainer.children.length === 0
+            ) {
                 invalidateImageProcessing();
                 hideLoading();
                 document.getElementById('uploadPlaceholder').style.display =
@@ -345,14 +433,7 @@ window.ImageEditor = (() => {
         updateBatchEmptyState();
         updateSelectedThumbnail();
 
-        thumbnail.addEventListener('click', () => {
-            selectedFile = file; // Store the clicked image as original
-            selectedFileName = file.name; // Update current file name
-            updateSelectedThumbnail();
-            document.getElementById('uploadPlaceholder').style.display = 'none';
-            document.getElementById('image').style.display = 'block';
-            processSelectedImage(file, removeBgCheckbox.checked);
-        });
+        thumbnail.addEventListener('click', () => selectFile(file));
     }
 
     // Update file input handler
@@ -363,101 +444,186 @@ window.ImageEditor = (() => {
         }
     });
 
-    document
-        .getElementById('downloadMenuButton')
-        .addEventListener('click', function () {
-            if (cropper) {
-                const requestId = imageRequestId;
-                const fileName = selectedFileName
-                    ? `edited_${selectedFileName.replace(/\.[^/.]+$/, '')}.png`
-                    : 'edited.png';
-                const width = parseInt(widthInput.value) || null;
-                const height = parseInt(heightInput.value) || null;
-
-                let canvas;
-                if (width && height) {
-                    const cropData = cropper.getData();
-                    const scaleX = width / cropData.width;
-                    const scaleY = height / cropData.height;
-                    const scale = Math.max(scaleX, scaleY);
-
-                    const scaledWidth = Math.round(cropData.width * scale);
-                    const scaledHeight = Math.round(cropData.height * scale);
-
-                    const finalWidth = width;
-                    const finalHeight = height;
-
-                    // Create temporary canvas for the cropped image
-                    const tempCanvas = cropper.getCroppedCanvas({
-                        width: scaledWidth,
-                        height: scaledHeight,
-                        fillColor: cropper.options.fillColor,
-                    });
-
-                    // Create final canvas with desired dimensions
-                    canvas = document.createElement('canvas');
-                    canvas.width = finalWidth;
-                    canvas.height = finalHeight;
-                    const ctx = canvas.getContext('2d');
-
-                    // Fill background if not transparent
-                    if (cropper.options.fillColor !== 'transparent') {
-                        ctx.fillStyle = cropper.options.fillColor;
-                        ctx.fillRect(0, 0, finalWidth, finalHeight);
-                    }
-
-                    // Center the scaled image
-                    const x = (finalWidth - scaledWidth) / 2;
-                    const y = (finalHeight - scaledHeight) / 2;
-                    ctx.drawImage(tempCanvas, x, y, scaledWidth, scaledHeight);
-                } else {
-                    canvas = cropper.getCroppedCanvas({
-                        fillColor: cropper.options.fillColor,
-                    });
-                }
-
-                // Convert canvas to blob and send to server
-                canvas.toBlob(function (blob) {
-                    if (requestId !== imageRequestId) return;
-                    const formData = new FormData();
-                    formData.append('editedImage', blob, fileName);
-
-                    // Show loading overlay while processing
-                    showLoading();
-
-                    fetch('/upload-edited', {
-                        method: 'POST',
-                        body: formData,
-                    })
-                        .then((response) => response.blob())
-                        .then((blob) => {
-                            if (requestId === imageRequestId) hideLoading();
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = fileName;
-                            document.body.appendChild(a);
-                            a.click();
-                            window.URL.revokeObjectURL(url);
-                            document.body.removeChild(a);
-                        })
-                        .catch((error) => {
-                            if (requestId !== imageRequestId) return;
-                            hideLoading();
-                            console.error('Error:', error);
-                            alert(
-                                'Error downloading the edited image. Please try again.',
-                            );
-                        });
-                }, 'image/png');
-            }
+    function createExportCanvas(sourceCropper, settings) {
+        const width = Number(settings.width);
+        const height = Number(settings.height);
+        if (
+            !Number.isSafeInteger(width) ||
+            !Number.isSafeInteger(height) ||
+            width <= 0 ||
+            height <= 0
+        ) {
+            throw new Error(
+                'Enter a valid width and height before downloading.',
+            );
+        }
+        const cropData = sourceCropper.getData();
+        const scale = Math.max(
+            width / cropData.width,
+            height / cropData.height,
+        );
+        const scaledWidth = Math.max(1, Math.round(cropData.width * scale));
+        const scaledHeight = Math.max(1, Math.round(cropData.height * scale));
+        const croppedCanvas = sourceCropper.getCroppedCanvas({
+            width: scaledWidth,
+            height: scaledHeight,
+            fillColor: settings.background,
         });
+        if (!croppedCanvas) throw new Error('Could not render the image.');
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Could not create the download canvas.');
+        if (settings.background !== 'transparent') {
+            context.fillStyle = settings.background;
+            context.fillRect(0, 0, width, height);
+        }
+        context.drawImage(
+            croppedCanvas,
+            (width - scaledWidth) / 2,
+            (height - scaledHeight) / 2,
+            scaledWidth,
+            scaledHeight,
+        );
+        return canvas;
+    }
+
+    function canvasToBlob(canvas) {
+        return new Promise((resolve, reject) => {
+            canvas.toBlob(
+                (blob) =>
+                    blob
+                        ? resolve(blob)
+                        : reject(new Error('Could not encode the image.')),
+                'image/png',
+            );
+        });
+    }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Give the browser time to begin reading the object URL before releasing it.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function uniqueFilename(name, usedNames) {
+        const safeName =
+            name.replace(/[\\/\x00-\x1f\x7f]/g, '_').replace(/^\.+/, '') ||
+            'image';
+        const extensionIndex = safeName.lastIndexOf('.');
+        const stem =
+            extensionIndex > 0 ? safeName.slice(0, extensionIndex) : safeName;
+        const extension =
+            extensionIndex > 0 ? safeName.slice(extensionIndex) : '';
+        let filename = safeName;
+        let suffix = 2;
+        while (usedNames.has(filename.toLowerCase()))
+            filename = `${stem} (${suffix++})${extension}`;
+        usedNames.add(filename.toLowerCase());
+        return filename;
+    }
+
+    function exportSnapshot(record, usedNames) {
+        if (record.status === 'unvisited') {
+            return {
+                filename: uniqueFilename(record.file.name, usedNames),
+                blob: record.file,
+            };
+        }
+        if (
+            record.status !== 'ready' ||
+            !record.savedCanvas ||
+            record.exportError
+        ) {
+            throw new Error(
+                `Cannot export ${record.file.name}. Select it and finish processing with valid dimensions, then retry.`,
+            );
+        }
+        const name = `edited_${record.file.name.replace(/\.[^/.]+$/, '')}.png`;
+        return {
+            filename: uniqueFilename(name, usedNames),
+            canvas: record.savedCanvas,
+        };
+    }
+
+    async function downloadImages(allImages = false) {
+        if (exportBusy || !cropper || !cropper.ready || imageAbortController)
+            return;
+        exportBusy = true;
+        controls.updateDownloadState();
+        try {
+            saveCurrentImage();
+            // Freeze the export before yielding, so edits/uploads/removals during encoding
+            // cannot change which images or settings are included in this download.
+            const usedNames = new Set();
+            const records = allImages
+                ? [...imageRecords.values()]
+                : [imageRecords.get(selectedFile)];
+            const snapshots = records.map((record) =>
+                exportSnapshot(record, usedNames),
+            );
+            if (allImages) {
+                const zip = new window.JSZip();
+                for (let index = 0; index < snapshots.length; index++) {
+                    controls.setDownloadStatus(
+                        `Preparing ${index + 1} of ${snapshots.length}…`,
+                    );
+                    const entry = snapshots[index];
+                    const blob =
+                        entry.blob || (await canvasToBlob(entry.canvas));
+                    zip.file(entry.filename, await blob.arrayBuffer());
+                }
+                const archive = await zip.generateAsync(
+                    { type: 'blob', compression: 'STORE' },
+                    (progress) => {
+                        controls.setDownloadStatus(
+                            `Creating ZIP… ${Math.round(progress.percent)}%`,
+                        );
+                    },
+                );
+                downloadBlob(archive, 'edited_images.zip');
+            } else {
+                controls.setDownloadStatus('Preparing image…');
+                const entry = snapshots[0];
+                downloadBlob(await canvasToBlob(entry.canvas), entry.filename);
+            }
+            controls.setDownloadStatus('Download ready.');
+        } catch (error) {
+            console.error('Download failed:', error);
+            controls.setDownloadStatus(
+                error.message || 'Download failed. Please try again.',
+            );
+        } finally {
+            exportBusy = false;
+            controls.updateDownloadState();
+        }
+    }
+
     return {
         attachControls(handlers) {
             controls = handlers;
         },
         handleFiles,
         processSelectedImage,
+        downloadImages,
+        get canDownload() {
+            return Boolean(
+                cropper &&
+                    cropper.ready &&
+                    !imageAbortController &&
+                    !exportBusy,
+            );
+        },
+        get exportBusy() {
+            return exportBusy;
+        },
         elements: {
             previewImage,
             fileInput,

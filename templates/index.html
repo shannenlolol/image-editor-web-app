@@ -24,10 +24,24 @@
             <div class="nav-right">
                 <label for="imageInput" class="upload-btn">Upload Images</label>
                 <input type="file" id="imageInput" accept="image/*" multiple />
-                <button id="downloadMenuButton" class="download-btn">Download</button>
+                <div class="download-control" id="downloadControl">
+                    <button type="button" id="downloadMenuButton" class="download-btn" aria-expanded="false"
+                        aria-controls="downloadMenu" disabled>
+                        Download <span aria-hidden="true">⌄</span>
+                    </button>
+                    <div id="downloadMenu" class="download-menu" hidden>
+                        <button type="button" id="downloadCurrent">
+                            Download current image
+                        </button>
+                        <button type="button" id="downloadAll">
+                            Download all as ZIP
+                        </button>
+                    </div>
+                </div>
             </div>
         </nav>
 
+        <p id="downloadStatus" class="download-status" role="status" aria-live="polite" hidden></p>
         <main class="main-container">
             <nav class="tool-rail" aria-label="Editing tools">
                 <button type="button" id="cropTool" class="tool-button" aria-label="Crop" title="Crop"
@@ -245,6 +259,7 @@
 
         <!-- Include the Cropper JS file -->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.9/cropper.min.js"></script>
+        <script src="/static/vendor/jszip.min.js"></script>
         <script src="/static/editor.js"></script>
         <script src="/static/controls.js"></script>
     </div>

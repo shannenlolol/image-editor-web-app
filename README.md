@@ -9,6 +9,8 @@ A web-based image editor that allows users to remove backgrounds from images and
 - Multiple images upload and download functionality
 - Simple and intuitive user interface
 - Real-time image processing
+- Download the current image as PNG or the whole batch as a ZIP
+- Keep each image's crop, dimensions, rotation, flips, and background when switching images
 
 ## Try it out!
 
@@ -72,22 +74,43 @@ With Node.js 18 or newer installed, run:
 node --test tests/*.test.cjs
 ```
 
-These tests load the external scripts in page order with controlled network responses and image
-decoding to check image switching, background-removal toggles, removal, and export
-races. They do not require Flask or a background-removal model.
+These tests load the external scripts in the order used by the page, with controlled
+network responses, image decoding, and canvas rendering. They cover image switching,
+controls, background removal, per-image state, and export races. ZIP tests use the
+vendored JSZip library and reopen the generated archives to inspect their entries.
+They do not require Flask or a background-removal model. Browser layout and actual
+pixel rendering still need a browser smoke test.
 
 ## Frontend structure
 
 - `templates/index.html`: page structure and script loading.
 - `static/style.css`: layout, responsive styles, and control appearance.
-- `static/editor.js`: image processing, Cropper lifecycle, uploads, and exports.
-  It exposes the `window.ImageEditor` API; internal state stays inside its closure.
-- `static/controls.js`: panels, dropdowns, rotation, and background controls.
-  It uses that API and registers UI callbacks with `attachControls()`.
+- `static/editor.js`: image records, processing requests, Cropper lifecycle, uploads,
+  and PNG/ZIP export. It exposes the `window.ImageEditor` API; internal state stays
+  inside its closure.
+- `static/controls.js`: panels, preset and download menus, rotation, and background
+  controls. It uses that API and registers UI callbacks with `attachControls()`.
+- `static/vendor/`: pinned JSZip 3.10.1 and its license. No build step is required.
 
-Load Cropper before `editor.js`, then `controls.js`, after the page markup.
+Load Cropper and JSZip before `editor.js`, then `controls.js`, after the page markup.
 The tests read these script tags so they exercise the same files and order.
-No build step is required.
+
+## Downloads
+
+The Download menu offers **Download current image** and **Download all as ZIP**.
+Downloads are generated locally in the browser; only background removal sends image
+data to the server. The former `/upload-edited` round trip is no longer used.
+
+Edited/visited images are exported as PNG with their current dimensions and settings.
+Images that have never been opened in the editor retain their original file bytes
+and filename in the ZIP. Duplicate filenames receive numeric suffixes.
+
+Switching away saves the image's settings, crop data, and rendered canvas. ZIP export
+takes a snapshot of those canvases, so later edits, uploads, and removals do not
+change an in-progress download. Interrupted processing or invalid dimensions must
+be resolved before that image can be included; a failed export does not download a
+partial archive. Saved canvases and ZIP bytes live in browser memory, so very large
+batches are constrained by available memory.
 
 ## Technologies Used
 

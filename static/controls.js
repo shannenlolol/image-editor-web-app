@@ -278,11 +278,7 @@
     // Handle background removal toggle
     removeBgCheckbox.addEventListener('change', function () {
         if (editor.selectedFile) {
-            editor.processSelectedImage(
-                editor.selectedFile,
-                this.checked,
-                false,
-            );
+            editor.processSelectedImage(editor.selectedFile, this.checked, false);
         }
     });
 
@@ -394,11 +390,97 @@
     bgColorInput.addEventListener('input', applyCustomBackground);
     bgColorInput.addEventListener('change', applyCustomBackground);
 
+    function syncBackgroundControls() {
+        const color = editor.selectedBackground;
+        const activeId =
+            color === 'transparent'
+                ? 'transparentBg'
+                : color === '#ffffff'
+                  ? 'whiteBg'
+                  : color === '#000000'
+                    ? 'blackBg'
+                    : 'customBg';
+        for (const id of ['transparentBg', 'whiteBg', 'blackBg', 'customBg']) {
+            document
+                .getElementById(id)
+                .setAttribute('aria-pressed', String(id === activeId));
+        }
+        document.getElementById('customBg').style.backgroundColor =
+            bgColorInput.value;
+    }
+
+    const downloadTrigger = document.getElementById('downloadMenuButton');
+    const downloadMenu = document.getElementById('downloadMenu');
+    const downloadControl = document.getElementById('downloadControl');
+    let downloadOpen = false;
+
+    function closeDownloadMenu(restoreFocus = false) {
+        downloadOpen = false;
+        downloadMenu.hidden = true;
+        downloadTrigger.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) downloadTrigger.focus();
+    }
+
+    function updateDownloadState() {
+        downloadTrigger.disabled = !editor.canDownload;
+        document.getElementById('downloadCurrent').disabled =
+            !editor.canDownload;
+        document.getElementById('downloadAll').disabled = !editor.canDownload;
+        downloadTrigger.setAttribute('aria-busy', String(editor.exportBusy));
+        if (!editor.canDownload) closeDownloadMenu();
+    }
+
+    function setDownloadStatus(message) {
+        const status = document.getElementById('downloadStatus');
+        status.textContent = message;
+        status.hidden = !message;
+    }
+
+    downloadTrigger.addEventListener('click', () => {
+        if (!editor.canDownload) return;
+        downloadOpen = !downloadOpen;
+        downloadMenu.hidden = !downloadOpen;
+        downloadTrigger.setAttribute('aria-expanded', String(downloadOpen));
+        if (downloadOpen) document.getElementById('downloadCurrent').focus();
+    });
+    document.getElementById('downloadCurrent').addEventListener('click', () => {
+        closeDownloadMenu(true);
+        editor.downloadImages(false);
+    });
+    document.getElementById('downloadAll').addEventListener('click', () => {
+        closeDownloadMenu(true);
+        editor.downloadImages(true);
+    });
+    downloadMenu.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeDownloadMenu(true);
+        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const target =
+                event.target === document.getElementById('downloadCurrent')
+                    ? 'downloadAll'
+                    : 'downloadCurrent';
+            document.getElementById(target).focus();
+        }
+    });
+    downloadControl.addEventListener('focusout', (event) => {
+        if (!downloadControl.contains(event.relatedTarget)) closeDownloadMenu();
+    });
+    document.addEventListener('click', (event) => {
+        if (!downloadControl.contains(event.target)) closeDownloadMenu();
+    });
+
     editor.attachControls({
         applyImageTransform,
         resetImageTransform,
         setToolControlsDisabled,
         updateBackgroundColor,
         syncPresetMenu,
+        syncRotationControls,
+        syncBackgroundControls,
+        updateDownloadState,
+        setDownloadStatus,
     });
+    updateDownloadState();
 })();

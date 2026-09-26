@@ -24,20 +24,5 @@ def remove_bg():
         img_byte_arr.seek(0)
         return send_file(img_byte_arr, mimetype='image/png')
 
-@app.route('/upload-edited', methods=['POST'])
-def upload_edited():
-    if 'editedImage' not in request.files:
-        return jsonify({'message': 'No file part'}), 400
-    file = request.files['editedImage']
-    if file.filename == '':
-        return jsonify({'message': 'No selected file'}), 400
-    if file:
-        return send_file(
-            BytesIO(file.read()),
-            mimetype='image/png',
-            download_name='edited.png',
-            as_attachment=True
-        )
-
 if __name__ == '__main__':
     app.run(debug=True)
