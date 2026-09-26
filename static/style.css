@@ -48,8 +48,10 @@ body {
   background: repeating-conic-gradient(#ffffff 0% 25%, #e8e8e8 0% 50%) 50% /
     20px 20px;
   border-radius: 10px;
-  overflow: auto;
-  border: 2px dashed #ddd;
+  overflow: hidden;
+  /* An inset outline leaves Cropper's measured viewport free of border pixels. */
+  outline: 2px dashed #ddd;
+  outline-offset: -2px;
 }
 
 #image {
@@ -84,7 +86,7 @@ body {
 }
 
 .drag-over {
-  border-color: #3498db;
+  outline-color: #3498db;
   background: rgba(52, 152, 219, 0.1);
 }
 
@@ -302,7 +304,7 @@ body {
   opacity: 0.8 !important;
 }
 
-/* Overlay the fixed viewport, not the image content that scrolls inside it. */
+/* Keep zoom controls fixed over the image viewport. */
 .zoom-controls {
   position: absolute;
   bottom: 20px;

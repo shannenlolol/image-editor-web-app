@@ -112,18 +112,18 @@ window.ImageEditor = (() => {
                         (containerHeight - 50) / imageData.naturalHeight,
                     );
                     cropper.zoomTo(scale);
-
-                    // Center the view
-                    setTimeout(() => {
-                        if (requestId !== imageRequestId) return;
-                        container.scrollLeft =
-                            (container.scrollWidth - container.clientWidth) / 2;
-                        container.scrollTop =
-                            (container.scrollHeight - container.clientHeight) /
-                            2;
-                    }, 100);
                 }
-                if (record.cropData) cropper.setData(record.cropData);
+                // zoomTo changes the image scale without resizing the crop box.
+                // Apply the full-image crop afterwards, or restore this image's edits.
+                cropper.setData(record.cropData || {
+                    x: 0,
+                    y: 0,
+                    width: cropper.getImageData().naturalWidth,
+                    height: cropper.getImageData().naturalHeight,
+                    rotate: rotationAngle,
+                    scaleX: horizontalScale,
+                    scaleY: verticalScale,
+                });
                 controls.updateDownloadState();
             },
         };
@@ -234,7 +234,7 @@ window.ImageEditor = (() => {
                 };
                 widthInput.value = String(sourceDimensions.width);
                 heightInput.value = String(sourceDimensions.height);
-                document.getElementById('aspectRatioPreset').value = 'free';
+                document.getElementById('aspectRatioPreset').value = 'original';
                 controls.syncPresetMenu();
             }
             previewImage.src = url;
@@ -429,7 +429,7 @@ window.ImageEditor = (() => {
                 controls.resetImageTransform();
                 widthInput.value = '';
                 heightInput.value = '';
-                document.getElementById('aspectRatioPreset').value = 'free';
+                document.getElementById('aspectRatioPreset').value = 'original';
                 controls.syncPresetMenu();
             }
             if (batchContainer.firstElementChild) {

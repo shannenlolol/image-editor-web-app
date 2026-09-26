@@ -210,7 +210,8 @@ function editor() {
                 this.verticalScale = data.scaleY;
             }
             getImageData() {
-                return { naturalWidth: 640, naturalHeight: 480 };
+                const file = urls.get(this.src);
+                return { naturalWidth: file.width || 640, naturalHeight: file.height || 480 };
             }
             zoomTo(value) {
                 this.zoomLevel = value;
@@ -480,7 +481,7 @@ test('a failed lone upload restores the empty editor and releases both image URL
     assert.equal(e.element('uploadPlaceholder').style.display, 'flex');
     assert.equal(e.element('widthInput').value, '');
     assert.equal(e.element('heightInput').value, '');
-    assert.equal(e.element('aspectRatioPreset').value, 'free');
+    assert.equal(e.element('aspectRatioPreset').value, 'original');
     assert.equal(e.element('imageInput').value, '');
     assert.equal(e.filename(), '');
     assert.equal(e.loading(), false);
@@ -844,21 +845,29 @@ test('incomplete or invalid resolution input leaves the last valid crop intact',
     assert.deepEqual(e.alerts, []);
 });
 
-test('uploads and image switches initialize native dimensions with no preset', async () => {
+test('new uploads initialize native dimensions and the Original preset', async () => {
     const e = editor();
     e.select({ name: 'square.png', width: 1151, height: 1151 }, false);
     await e.decode();
     assert.equal(e.element('widthInput').value, '1151');
     assert.equal(e.element('heightInput').value, '1151');
-    assert.equal(e.element('aspectRatioPreset').value, 'free');
-    assert.equal(Number.isNaN(e.cropper().options.aspectRatio), true);
+    assert.equal(e.element('aspectRatioPreset').value, 'original');
+    assert.equal(e.cropper().options.aspectRatio, 1);
+    assert.equal(e.element('presetValue').textContent, 'Original');
+    assert.equal(e.cropper().getData().x, 0);
+    assert.equal(e.cropper().getData().y, 0);
+    assert.equal(e.cropper().getData().width, 1151);
+    assert.equal(e.cropper().getData().height, 1151);
     e.element('widthInput').value = '700';
     e.element('widthInput').dispatchEvent(new Event('input'));
     e.select({ name: 'portrait.png', width: 900, height: 1600 }, false);
     await e.decode();
     assert.equal(e.element('widthInput').value, '900');
     assert.equal(e.element('heightInput').value, '1600');
-    assert.equal(e.element('aspectRatioPreset').value, 'free');
+    assert.equal(e.element('aspectRatioPreset').value, 'original');
+    assert.equal(e.cropper().options.aspectRatio, 900 / 1600);
+    assert.equal(e.cropper().getData().width, 900);
+    assert.equal(e.cropper().getData().height, 1600);
 });
 
 test('background reprocessing preserves custom dimensions and reset restores native dimensions', async () => {
@@ -878,7 +887,7 @@ test('background reprocessing preserves custom dimensions and reset restores nat
     await e.decode();
     assert.equal(e.element('widthInput').value, '1151');
     assert.equal(e.element('heightInput').value, '1151');
-    assert.equal(e.element('aspectRatioPreset').value, 'free');
+    assert.equal(e.element('aspectRatioPreset').value, 'original');
 });
 
 test('fixed presets synchronize output fields and exported canvas with the new crop', async () => {

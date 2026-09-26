@@ -100,15 +100,15 @@
                             <div class="preset-dropdown" id="presetDropdown">
                                 <button type="button" id="presetTrigger" aria-haspopup="listbox" aria-expanded="false"
                                     aria-controls="presetMenu" aria-labelledby="presetLabel presetValue">
-                                    <span id="presetValue">None</span><span aria-hidden="true">⌄</span>
+                                    <span id="presetValue">Original</span><span aria-hidden="true">⌄</span>
                                 </button>
                                 <div id="presetMenu" class="preset-menu" role="listbox" aria-labelledby="presetLabel"
                                     hidden>
-                                    <button type="button" id="presetFree" role="option" aria-selected="true"
+                                    <button type="button" id="presetFree" role="option" aria-selected="false"
                                         tabindex="-1">
                                         None
                                     </button>
-                                    <button type="button" id="presetOriginal" role="option" aria-selected="false"
+                                    <button type="button" id="presetOriginal" role="option" aria-selected="true"
                                         tabindex="-1">
                                         Original
                                     </button>
@@ -128,7 +128,7 @@
                             </div>
                             <select id="aspectRatioPreset" hidden aria-hidden="true" tabindex="-1">
                                 <option value="free">None</option>
-                                <option value="original">Original</option>
+                                <option value="original" selected>Original</option>
                                 <option value="1">1:1 (Square)</option>
                                 <option value="0.8">4:5 (Portrait)</option>
                                 <option value="0.5625">9:16 (Story)</option>
