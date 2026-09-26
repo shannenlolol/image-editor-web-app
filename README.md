@@ -66,6 +66,26 @@ python app.py
 http://localhost:5000
 ```
 
+## Background-removal upload limits
+
+`POST /remove-bg` accepts PNG, JPEG, WebP, GIF, BMP and TIFF, identified by
+their contents rather than the filename or MIME type. Animated and multipage
+images use the first frame/page. The entire upload request (including multipart
+overhead) must fit within **20 MiB**, and the decoded image must contain no more
+than **25,000,000 pixels**. Browser-only editing and downloads do not use this endpoint.
+
+Files are verified and fully decoded before background-removal inference. Invalid,
+empty or damaged images return HTTP 400, recognized but unsupported formats return
+415, and request-size or pixel-limit violations return 413. Errors use JSON with a
+`message` field. A reverse proxy may enforce its own request limit before Flask.
+
+Run backend validation tests with Flask and Pillow installed (no model download or
+inference required):
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
+```
+
 ## Frontend regression tests
 
 With Node.js 18 or newer installed, run:

@@ -193,7 +193,21 @@ window.ImageEditor = (() => {
                     signal: controller.signal,
                 });
                 if (requestId !== imageRequestId) return;
-                if (!response.ok) throw new Error('Background removal failed.');
+                if (!response.ok) {
+                    const error = new Error('Background removal failed.');
+                    error.userMessage = response.status === 413
+                        ? 'Image upload is too large. Use a smaller image and try again.'
+                        : 'Background removal failed. Please try again.';
+                    try {
+                        const details = await response.json();
+                        if (typeof details.message === 'string' && details.message.trim()) {
+                            error.userMessage = details.message;
+                        }
+                    } catch (_) {
+                        // A proxy may return HTML instead of the API's JSON error.
+                    }
+                    throw error;
+                }
                 blob = await response.blob();
             }
             if (requestId !== imageRequestId) return;
@@ -226,7 +240,7 @@ window.ImageEditor = (() => {
                 return;
             record.status = 'error';
             console.error('Error:', error);
-            alert('Error processing image. Please try again.');
+            alert(error.userMessage || 'Error processing image. Please try again.');
         } finally {
             if (url && url !== displayedImageUrl) URL.revokeObjectURL(url);
             if (requestId === imageRequestId) {

@@ -297,6 +297,52 @@ function editor() {
     };
 }
 
+test('upload rejection displays the server message and permits selecting another image', async () => {
+    const e = editor();
+    e.select({ name: 'large.png' });
+    e.requests[0].resolve({
+        ok: false,
+        status: 413,
+        json: async () => ({ message: 'Image is too large. Maximum decoded size is 25 megapixels.' }),
+    });
+    await flush();
+    assert.match(e.alerts[0], /25 megapixels/);
+    assert.equal(e.loading(), false);
+    assert.equal(e.decodes.length, 0);
+    e.select({ name: 'valid.png' }, false);
+    await e.decode();
+    assert.equal(e.filename(), 'valid.png');
+    assert.equal(e.loading(), false);
+});
+
+test('non-JSON upload rejection has a useful fallback', async () => {
+    const e = editor();
+    e.select({ name: 'large.png' });
+    e.requests[0].resolve({
+        ok: false,
+        status: 413,
+        json: async () => { throw new SyntaxError('HTML response'); },
+    });
+    await flush();
+    assert.match(e.alerts[0], /too large/);
+    assert.equal(e.loading(), false);
+});
+
+test('a delayed validation error cannot interrupt a newer selection', async () => {
+    const e = editor();
+    const body = deferred();
+    e.select({ name: 'large.png' });
+    e.requests[0].resolve({ ok: false, status: 413, json: () => body.promise });
+    await flush();
+    e.select({ name: 'next.png' }, false);
+    body.resolve({ message: 'Image is too large.' });
+    await flush();
+    assert.deepEqual(e.alerts, []);
+    assert.equal(e.loading(), true);
+    await e.decode();
+    assert.equal(e.filename(), 'next.png');
+});
+
 test('an older response cannot replace the latest image or filename', async () => {
     const e = editor();
     e.select({ name: 'A.png' });
