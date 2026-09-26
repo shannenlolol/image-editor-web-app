@@ -72,9 +72,22 @@ With Node.js 18 or newer installed, run:
 node --test tests/*.test.cjs
 ```
 
-These tests exercise the editor script with controlled network responses and image
+These tests load the external scripts in page order with controlled network responses and image
 decoding to check image switching, background-removal toggles, removal, and export
 races. They do not require Flask or a background-removal model.
+
+## Frontend structure
+
+- `templates/index.html`: page structure and script loading.
+- `static/style.css`: layout, responsive styles, and control appearance.
+- `static/editor.js`: image processing, Cropper lifecycle, uploads, and exports.
+  It exposes the `window.ImageEditor` API; internal state stays inside its closure.
+- `static/controls.js`: panels, dropdowns, rotation, and background controls.
+  It uses that API and registers UI callbacks with `attachControls()`.
+
+Load Cropper before `editor.js`, then `controls.js`, after the page markup.
+The tests read these script tags so they exercise the same files and order.
+No build step is required.
 
 ## Technologies Used
 

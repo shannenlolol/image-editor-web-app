@@ -6,13 +6,24 @@ const { test } = require('node:test');
 
 // Exercise the page's real script with controllable network and image decoding.
 // Fetch intentionally ignores aborts: stale results must be safe even without cancellation.
-const html = fs.readFileSync(path.join(__dirname, '../templates/index.html'), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-const flush = () => new Promise(resolve => setImmediate(resolve));
+const html = fs.readFileSync(
+    path.join(__dirname, '../templates/index.html'),
+    'utf8',
+);
+const scripts = [
+    ...html.matchAll(/<script src="(\/static\/[^" ]+\.js)"><\/script>/g),
+].map(([, src]) => ({
+    filename: src,
+    source: fs.readFileSync(path.join(__dirname, '..', src), 'utf8'),
+}));
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function deferred() {
     let resolve, reject;
-    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const promise = new Promise((yes, no) => {
+        resolve = yes;
+        reject = no;
+    });
     return { promise, resolve, reject };
 }
 
@@ -25,14 +36,34 @@ function editor() {
             this.value = '';
             this.classList = { add() {}, remove() {} };
         }
-        appendChild(child) { this.children.push(child); child.parent = this; }
-        removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
-        remove() { this.parent.removeChild(this); }
-        removeAttribute(name) { delete this[name]; }
-        setAttribute(name, value) { this[name] = value; }
-        focus() { this.focused = true; }
-        contains(target) { return target === this || this.children.some(child => child.contains(target)); }
-        get firstElementChild() { return this.children[0]; }
+        appendChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        }
+        removeChild(child) {
+            this.children.splice(this.children.indexOf(child), 1);
+        }
+        remove() {
+            this.parent.removeChild(this);
+        }
+        removeAttribute(name) {
+            delete this[name];
+        }
+        setAttribute(name, value) {
+            this[name] = value;
+        }
+        focus() {
+            this.focused = true;
+        }
+        contains(target) {
+            return (
+                target === this ||
+                this.children.some((child) => child.contains(target))
+            );
+        }
+        get firstElementChild() {
+            return this.children[0];
+        }
         click() {
             const event = new Event('click');
             if (this.onclick) this.onclick(event);
@@ -40,17 +71,29 @@ function editor() {
         }
     }
     const elements = new Map();
-    const element = id => {
+    const element = (id) => {
         if (!elements.has(id)) elements.set(id, new Element());
         return elements.get(id);
     };
-    const requests = [], decodes = [], croppers = [], exports = [], alerts = [], canvases = [];
-    const urls = new Map(), revoked = new Set();
+    const requests = [],
+        decodes = [],
+        croppers = [],
+        exports = [],
+        alerts = [],
+        canvases = [];
+    const urls = new Map(),
+        revoked = new Set();
     let nextUrl = 0;
     let resizeCanvas;
     const urlAPI = {
-        createObjectURL(blob) { const url = `blob:${++nextUrl}`; urls.set(url, blob); return url; },
-        revokeObjectURL(url) { revoked.add(url); }
+        createObjectURL(blob) {
+            const url = `blob:${++nextUrl}`;
+            urls.set(url, blob);
+            return url;
+        },
+        revokeObjectURL(url) {
+            revoked.add(url);
+        },
     };
     const context = vm.createContext({
         document: {
@@ -58,16 +101,19 @@ function editor() {
             getElementById: element,
             querySelector: element,
             querySelectorAll: () => [],
-            createElement: tag => {
+            createElement: (tag) => {
                 const element = new Element();
                 if (tag === 'canvas') {
                     canvases.push(element);
-                    element.getContext = () => ({ fillRect() {}, drawImage() {} });
-                    element.toBlob = callback => exports.push(callback);
+                    element.getContext = () => ({
+                        fillRect() {},
+                        drawImage() {},
+                    });
+                    element.toBlob = (callback) => exports.push(callback);
                 }
                 return element;
             },
-            body: new Element()
+            body: new Element(),
         },
         Image: class {
             decode() {
@@ -80,7 +126,9 @@ function editor() {
             }
         },
         ResizeObserver: class {
-            constructor(callback) { resizeCanvas = callback; }
+            constructor(callback) {
+                resizeCanvas = callback;
+            }
             observe() {}
         },
         Cropper: class {
@@ -90,19 +138,42 @@ function editor() {
                 this.ready = true;
                 croppers.push(this);
             }
-            destroy() { this.destroyed = true; }
-            setAspectRatio(ratio) { this.options.aspectRatio = ratio; }
-            resize() { this.resizeCount = (this.resizeCount || 0) + 1; }
-            rotateTo(angle) { this.rotation = angle; }
-            scale(x, y) { this.horizontalScale = x; this.verticalScale = y; }
-            scaleX(value) { this.horizontalScale = value; }
-            scaleY(value) { this.verticalScale = value; }
-            getData() { return { width: 640, height: 480 }; }
-            getCroppedCanvas() { return { toBlob: callback => exports.push(callback) }; }
+            destroy() {
+                this.destroyed = true;
+            }
+            setAspectRatio(ratio) {
+                this.options.aspectRatio = ratio;
+            }
+            resize() {
+                this.resizeCount = (this.resizeCount || 0) + 1;
+            }
+            rotateTo(angle) {
+                this.rotation = angle;
+            }
+            scale(x, y) {
+                this.horizontalScale = x;
+                this.verticalScale = y;
+            }
+            scaleX(value) {
+                this.horizontalScale = value;
+            }
+            scaleY(value) {
+                this.verticalScale = value;
+            }
+            getData() {
+                return { width: 640, height: 480 };
+            }
+            getCroppedCanvas() {
+                return { toBlob: (callback) => exports.push(callback) };
+            }
         },
         FormData: class {
-            constructor() { this.entries = new Map(); }
-            append(key, value, filename) { this.entries.set(key, { value, filename }); }
+            constructor() {
+                this.entries = new Map();
+            }
+            append(key, value, filename) {
+                this.entries.set(key, { value, filename });
+            }
         },
         AbortController,
         Event,
@@ -113,15 +184,16 @@ function editor() {
             requests.push({ ...task, url, options });
             return task.promise;
         },
-        alert: message => alerts.push(message),
+        alert: (message) => alerts.push(message),
         console: { error() {} },
-        setTimeout
+        setTimeout,
     });
-    vm.runInContext(script, context);
+    for (const script of scripts)
+        vm.runInContext(script.source, context, { filename: script.filename });
     function select(file, removeBackground = true) {
         element('removeBg').checked = removeBackground;
         context.selectedFile = file;
-        vm.runInContext('handleFiles([selectedFile])', context);
+        context.window.ImageEditor.handleFiles([file]);
     }
     function toggle(checked) {
         element('removeBg').checked = checked;
@@ -131,16 +203,35 @@ function editor() {
         request.resolve({ blob: () => Promise.resolve(blob) });
         await flush();
     }
-    async function decode(task = decodes.at(-1)) { task.resolve(); await flush(); }
+    async function decode(task = decodes.at(-1)) {
+        task.resolve();
+        await flush();
+    }
     return {
-        element, select, toggle, respond, decode, requests, decodes, croppers, exports, alerts, revoked, canvases,
+        element,
+        select,
+        toggle,
+        respond,
+        decode,
+        requests,
+        decodes,
+        croppers,
+        exports,
+        alerts,
+        revoked,
+        canvases,
         resizeCanvas: () => resizeCanvas(),
-        applyImageTransform: () => vm.runInContext('applyImageTransform()', context),
+        applyImageTransform: () => {
+            const api = context.window.ImageEditor;
+            api.cropper.rotateTo(api.rotationAngle);
+            api.cropper.scale(api.horizontalScale, api.verticalScale);
+        },
         visibleImage: () => urls.get(element('image').src),
-        filename: () => vm.runInContext('currentFileName', context),
-        cropper: () => vm.runInContext('cropper', context),
+        filename: () => context.window.ImageEditor.selectedFileName,
+        cropper: () => context.window.ImageEditor.cropper,
         loading: () => element('loadingOverlay').style.display === 'flex',
-        remove: index => element('batchImages').children[index].children[1].click()
+        remove: (index) =>
+            element('batchImages').children[index].children[1].click(),
     };
 }
 
@@ -173,7 +264,8 @@ test('an older failure cannot dismiss the latest loading indicator or show an al
 });
 
 test('a delayed response body cannot replace a newer completed selection', async () => {
-    const e = editor(), body = deferred();
+    const e = editor(),
+        body = deferred();
     e.select({ name: 'A.png' });
     e.requests[0].resolve({ blob: () => body.promise });
     await flush();
@@ -216,7 +308,8 @@ test('rapid on/off/on toggles use the latest setting, even for the same file', a
 });
 
 test('switching removal off keeps the original when the old request finishes', async () => {
-    const e = editor(), file = { name: 'A.png' };
+    const e = editor(),
+        file = { name: 'A.png' };
     e.select(file);
     e.toggle(false);
     await e.decode();
@@ -267,7 +360,7 @@ test('the previous image cannot be exported while a new selection is processing'
     await e.decode();
     const previous = e.cropper();
     e.select({ name: 'B.png' });
-    e.element('cropButton').click();
+    e.element('downloadMenuButton').click();
     assert.equal(previous.destroyed, true);
     assert.equal(e.exports.length, 0);
 });
@@ -276,20 +369,26 @@ test('a pending canvas export is discarded after selecting another image', async
     const e = editor();
     e.select({ name: 'A.png' }, false);
     await e.decode();
-    e.element('cropButton').click();
+    e.element('downloadMenuButton').click();
     e.select({ name: 'B.png' });
     e.exports[0]({ name: 'A export' });
-    assert.equal(e.requests.filter(r => r.url === '/upload-edited').length, 0);
+    assert.equal(
+        e.requests.filter((r) => r.url === '/upload-edited').length,
+        0,
+    );
 });
 
 test('a previous download cannot clear loading for a newly selected image', async () => {
     const e = editor();
     e.select({ name: 'A.jpg' }, false);
     await e.decode();
-    e.element('cropButton').click();
+    e.element('downloadMenuButton').click();
     e.exports[0]({ name: 'A export' });
     const download = e.requests[0];
-    assert.equal(download.options.body.entries.get('editedImage').filename, 'edited_A.png');
+    assert.equal(
+        download.options.body.entries.get('editedImage').filename,
+        'edited_A.png',
+    );
     e.select({ name: 'B.png' });
     await e.respond(download, { name: 'A download' });
     assert.equal(e.loading(), true);
@@ -468,14 +567,18 @@ test('fixed presets synchronize output fields and exported canvas with the new c
     const cropper = e.cropper();
     cropper.getData = () => ({ width: 499.6, height: 499.6 });
     const preset = e.element('aspectRatioPreset');
-    for (const [value, width, height] of [['1', 500, 500], ['0.8', 500, 625], ['0.5625', 500, 889]]) {
+    for (const [value, width, height] of [
+        ['1', 500, 500],
+        ['0.8', 500, 625],
+        ['0.5625', 500, 889],
+    ]) {
         preset.value = value;
         preset.dispatchEvent(new Event('change'));
         assert.equal(e.element('widthInput').value, String(width));
         assert.equal(e.element('heightInput').value, String(height));
         assert.equal(preset.value, value);
         assert.equal(cropper.options.aspectRatio, Number(value));
-        e.element('cropButton').click();
+        e.element('downloadMenuButton').click();
         assert.equal(e.canvases.at(-1).width, width);
         assert.equal(e.canvases.at(-1).height, height);
     }
@@ -534,7 +637,9 @@ test('custom colour previews on input without replacing the cropper, and transpa
     const cropper = e.cropper();
     const picker = e.element('bgColor');
     let opened = false;
-    picker.addEventListener('click', () => { opened = true; });
+    picker.addEventListener('click', () => {
+        opened = true;
+    });
     e.element('customBg').click();
     assert.equal(opened, true);
     picker.value = '#e34a60';
@@ -552,7 +657,6 @@ test('custom colour previews on input without replacing the cropper, and transpa
     await e.decode();
     assert.equal(e.cropper().options.fillColor, 'transparent');
 });
-
 
 test('custom colour can be chosen before uploading with removal off', async () => {
     const e = editor();
