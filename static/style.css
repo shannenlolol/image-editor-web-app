@@ -878,3 +878,27 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 }
 .preset-menu button[aria-selected="true"] { background: #e8f2ff; color: #2063a5; }
 .preset-menu button:hover, .preset-menu button:focus-visible { background: #f0f4f8; outline-offset: -2px; }
+
+.rotation-controls { border: 0; padding: 0; margin: 0; min-width: 0; }
+.rotation-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 24px; }
+.rotation-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid #e2e6ea;
+  border-radius: 6px;
+  background: #f8f9fa;
+  color: #596873;
+  cursor: pointer;
+}
+.rotation-actions svg { width: 22px; height: 22px; }
+.rotation-actions button:hover { background: #e8f2ff; }
+.rotation-actions button[aria-pressed="true"] { background: #d9eaff; color: #2063a5; border-color: #80b4f3; }
+.rotation-angle-input { display: flex; align-items: center; gap: 4px; color: #596873; }
+#rotationSlider { width: 100%; margin: 0; min-height: 44px; accent-color: #2b79dc; cursor: pointer; }
+.rotation-range-labels { display: flex; justify-content: space-between; color: #596873; font-size: 12px; }
+.tool-controls { border: 0; padding: 0; margin: 0; min-width: 0; }
+.tool-controls:disabled { opacity: 0.45; }
+.tool-controls:disabled button, .tool-controls:disabled input { cursor: default; }

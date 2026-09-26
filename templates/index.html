@@ -33,6 +33,7 @@
             <nav class="tool-rail" aria-label="Editing tools">
                 <button type="button" id="cropTool" class="tool-button" aria-label="Crop" title="Crop" aria-controls="cropPanel" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v13a2 2 0 0 0 2 2h13M3 6h13a2 2 0 0 1 2 2v13"/></svg></button>
                 <button type="button" id="backgroundTool" class="tool-button" aria-label="Background" title="Background" aria-controls="backgroundPanel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 3v18"/><path d="M12 7h9M12 12h9M12 17h9"/></svg></button>
+                <button type="button" id="rotationTool" class="tool-button" aria-label="Rotate &amp; flip" title="Rotate &amp; flip" aria-controls="rotationPanel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6.5 9 8 4l12 4-0.4 1M5.5 15 5 17l12 4 2-6M2 12h20"/></svg></button>
                 <button type="button" id="resetButton" class="tool-button reset-tool" aria-label="Reset to Original" title="Reset to Original"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg></button>
             </nav>
             <aside class="tool-panel" id="toolPanel" aria-label="Tool settings">
@@ -41,57 +42,78 @@
                     <button type="button" id="closeToolPanel" class="icon-button" aria-label="Close tool panel" title="Close tool panel">×</button>
                 </div>
                 <section id="cropPanel" aria-labelledby="cropTool">
-                    <div class="control-section resolution-fields">
-                        <div class="dimension-row">
-                            <label for="widthInput">Width</label>
-                            <input type="number" id="widthInput" aria-label="Width in pixels" min="1" step="1">
-                        </div>
-                        <div class="dimension-row">
-                            <label for="heightInput">Height</label>
-                            <input type="number" id="heightInput" aria-label="Height in pixels" min="1" step="1">
-                        </div>
-                    </div>
-                    <div class="control-section">
-                        <label class="control-label" id="presetLabel" for="presetTrigger">Preset</label>
-                        <div class="preset-dropdown" id="presetDropdown">
-                            <button type="button" id="presetTrigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="presetMenu" aria-labelledby="presetLabel presetValue"><span id="presetValue">None</span><span aria-hidden="true">⌄</span></button>
-                            <div id="presetMenu" class="preset-menu" role="listbox" aria-labelledby="presetLabel" hidden>
-                                <button type="button" id="presetFree" role="option" aria-selected="true" tabindex="-1">None</button>
-                                <button type="button" id="presetOriginal" role="option" aria-selected="false" tabindex="-1">Original</button>
-                                <button type="button" id="presetSquare" role="option" aria-selected="false" tabindex="-1">1:1 (Square)</button>
-                                <button type="button" id="presetPortrait" role="option" aria-selected="false" tabindex="-1">4:5 (Portrait)</button>
-                                <button type="button" id="presetStory" role="option" aria-selected="false" tabindex="-1">9:16 (Story)</button>
+                    <fieldset id="cropControls" class="tool-controls" disabled>
+                        <div class="control-section resolution-fields">
+                            <div class="dimension-row">
+                                <label for="widthInput">Width</label>
+                                <input type="number" id="widthInput" aria-label="Width in pixels" min="1" step="1">
+                            </div>
+                            <div class="dimension-row">
+                                <label for="heightInput">Height</label>
+                                <input type="number" id="heightInput" aria-label="Height in pixels" min="1" step="1">
                             </div>
                         </div>
-                        <select id="aspectRatioPreset" hidden aria-hidden="true" tabindex="-1">
-                            <option value="free">None</option>
-                            <option value="original">Original</option>
-                            <option value="1">1:1 (Square)</option>
-                            <option value="0.8">4:5 (Portrait)</option>
-                            <option value="0.5625">9:16 (Story)</option>
-                            <option value="custom" disabled hidden>Custom</option>
-                        </select>
-                    </div>
+                        <div class="control-section">
+                            <label class="control-label" id="presetLabel" for="presetTrigger">Preset</label>
+                            <div class="preset-dropdown" id="presetDropdown">
+                                <button type="button" id="presetTrigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="presetMenu" aria-labelledby="presetLabel presetValue"><span id="presetValue">None</span><span aria-hidden="true">⌄</span></button>
+                                <div id="presetMenu" class="preset-menu" role="listbox" aria-labelledby="presetLabel" hidden>
+                                    <button type="button" id="presetFree" role="option" aria-selected="true" tabindex="-1">None</button>
+                                    <button type="button" id="presetOriginal" role="option" aria-selected="false" tabindex="-1">Original</button>
+                                    <button type="button" id="presetSquare" role="option" aria-selected="false" tabindex="-1">1:1 (Square)</button>
+                                    <button type="button" id="presetPortrait" role="option" aria-selected="false" tabindex="-1">4:5 (Portrait)</button>
+                                    <button type="button" id="presetStory" role="option" aria-selected="false" tabindex="-1">9:16 (Story)</button>
+                                </div>
+                            </div>
+                            <select id="aspectRatioPreset" hidden aria-hidden="true" tabindex="-1">
+                                <option value="free">None</option>
+                                <option value="original">Original</option>
+                                <option value="1">1:1 (Square)</option>
+                                <option value="0.8">4:5 (Portrait)</option>
+                                <option value="0.5625">9:16 (Story)</option>
+                                <option value="custom" disabled hidden>Custom</option>
+                            </select>
+                        </div>
+                    </fieldset>
+                </section>
+                <section id="rotationPanel" aria-labelledby="rotationTool" hidden>
+                    <fieldset id="rotationControls" class="rotation-controls tool-controls" disabled>
+                        <!-- <legend class="control-label">Rotate &amp; flip</legend> -->
+                        <div class="rotation-actions">
+                            <button type="button" id="rotateLeft" aria-label="Rotate left 90 degrees" title="Rotate left 90°"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10a8 8 0 1 1 2 8M3 4v6h6"/></svg></button>
+                            <button type="button" id="rotateRight" aria-label="Rotate right 90 degrees" title="Rotate right 90°"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10a8 8 0 1 0-2 8M21 4v6h-6"/></svg></button>
+                            <button type="button" id="flipHorizontal" aria-label="Flip horizontally" aria-pressed="false" title="Flip horizontally"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18M8 5 3 19h5ZM16 5l5 14h-5Z"/></svg></button>
+                            <button type="button" id="flipVertical" aria-label="Flip vertically" aria-pressed="false" title="Flip vertically"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h18M5 8l14-5v5ZM5 16l14 5v-5Z"/></svg></button>
+                        </div>
+                        <div class="dimension-row rotation-angle-row">
+                            <label for="rotationAngle">Angle</label>
+                            <div class="rotation-angle-input"><input type="number" id="rotationAngle" min="-180" max="180" step="0.1" value="0"><span aria-hidden="true">°</span></div>
+                        </div>
+                        <input type="range" id="rotationSlider" aria-label="Rotation angle in degrees" min="-180" max="180" step="0.1" value="0">
+                        <div class="rotation-range-labels" aria-hidden="true"><span>−180°</span><span>0°</span><span>180°</span></div>
+                    </fieldset>
                 </section>
                 <section id="backgroundPanel" aria-labelledby="backgroundTool" hidden>
-                    <div class="background-removal-row">
-                        <div>
-                            <label for="removeBg">Remove background</label>
-                            <p id="removeBgHelp">Cuts out the subject automatically</p>
-                        </div>
-                        <input type="checkbox" id="removeBg" class="background-switch" role="switch" aria-describedby="removeBgHelp">
-                    </div>
-                    <fieldset class="background-replacements" id="backgroundReplacements">
-                        <legend>Background Colour</legend>
-                        <div class="background-swatches">
-                            <button type="button" id="transparentBg" class="background-swatch transparent-swatch" aria-label="Transparent background" aria-pressed="true" title="Transparent"></button>
-                            <button type="button" id="whiteBg" class="background-swatch white-swatch" aria-label="White background" aria-pressed="false" title="White"></button>
-                            <button type="button" id="blackBg" class="background-swatch black-swatch" aria-label="Black background" aria-pressed="false" title="Black"></button>
-                            <div class="custom-background">
-                                <button type="button" id="customBg" class="background-swatch custom-swatch" aria-label="Custom background colour" aria-pressed="false" title="Custom colour">+</button>
-                                <input type="color" id="bgColor" value="#ffffff" aria-label="Custom background colour picker" tabindex="-1">
+                    <fieldset id="backgroundControls" class="tool-controls" disabled>
+                        <div class="background-removal-row">
+                            <div>
+                                <label for="removeBg">Remove background</label>
+                                <p id="removeBgHelp">Cuts out the subject automatically</p>
                             </div>
+                            <input type="checkbox" id="removeBg" class="background-switch" role="switch" aria-describedby="removeBgHelp">
                         </div>
+                        <fieldset class="background-replacements" id="backgroundReplacements">
+                            <legend>Background Colour</legend>
+                            <div class="background-swatches">
+                                <button type="button" id="transparentBg" class="background-swatch transparent-swatch" aria-label="Transparent background" aria-pressed="true" title="Transparent"></button>
+                                <button type="button" id="whiteBg" class="background-swatch white-swatch" aria-label="White background" aria-pressed="false" title="White"></button>
+                                <button type="button" id="blackBg" class="background-swatch black-swatch" aria-label="Black background" aria-pressed="false" title="Black"></button>
+                                <div class="custom-background">
+                                    <button type="button" id="customBg" class="background-swatch custom-swatch" aria-label="Custom background colour" aria-pressed="false" title="Custom colour">+</button>
+                                    <input type="color" id="bgColor" value="#ffffff" aria-label="Custom background colour picker" tabindex="-1">
+                                </div>
+                            </div>
+                        </fieldset>
                     </fieldset>
                 </section>
             </aside>
@@ -138,6 +160,9 @@
             let currentFileName = '';
             let originalDimensions = null;
             let selectedBackground = 'transparent';
+            let rotationAngle = 0;
+            let horizontalScale = 1;
+            let verticalScale = 1;
             const imageElement = document.getElementById('image');
             const inputElement = document.getElementById('imageInput');
             const removeBgCheckbox = document.getElementById('removeBg');
@@ -152,6 +177,7 @@
             const toolButtons = {
                 crop: document.getElementById('cropTool'),
                 background: document.getElementById('backgroundTool'),
+                rotation: document.getElementById('rotationTool'),
             };
             let activeTool = 'crop';
 
@@ -238,7 +264,7 @@
                     toolButtons[name].setAttribute('aria-expanded', String(name === tool));
                     document.getElementById(name + 'Panel').hidden = name !== tool;
                 }
-                if (tool) document.getElementById('toolPanelTitle').textContent = tool === 'crop' ? 'Crop' : 'Background';
+                if (tool) document.getElementById('toolPanelTitle').textContent = ({ crop: 'Crop', background: 'Background', rotation: 'Rotate & flip' })[tool];
             }
 
             for (const [name, button] of Object.entries(toolButtons)) {
@@ -262,6 +288,55 @@
                     if (cropper && cropper.ready) cropper.resize();
                 }).observe(document.getElementById('dropZone'));
             }
+
+            function syncRotationControls() {
+                document.getElementById('rotationAngle').value = String(rotationAngle);
+                document.getElementById('rotationSlider').value = String(rotationAngle);
+                document.getElementById('rotationSlider').setAttribute('aria-valuetext', rotationAngle + ' degrees');
+                document.getElementById('flipHorizontal').setAttribute('aria-pressed', String(horizontalScale === -1));
+                document.getElementById('flipVertical').setAttribute('aria-pressed', String(verticalScale === -1));
+            }
+
+            function applyImageTransform() {
+                cropper.rotateTo(rotationAngle);
+                cropper.scale(horizontalScale, verticalScale);
+            }
+
+            function resetImageTransform() {
+                rotationAngle = 0;
+                horizontalScale = 1;
+                verticalScale = 1;
+                syncRotationControls();
+            }
+
+            function setRotation(value) {
+                if (!cropper || !cropper.ready || !Number.isFinite(value)) return;
+                rotationAngle = Math.round((((value + 180) % 360 + 360) % 360 - 180) * 10) / 10;
+                // Keep the positive endpoint at the right end of the slider.
+                if (rotationAngle === -180 && value > 0) rotationAngle = 180;
+                cropper.rotateTo(rotationAngle);
+                syncRotationControls();
+            }
+            document.getElementById('rotateLeft').addEventListener('click', () => setRotation(rotationAngle - 90));
+            document.getElementById('rotateRight').addEventListener('click', () => setRotation(rotationAngle + 90));
+            for (const id of ['rotationAngle', 'rotationSlider']) {
+                document.getElementById(id).addEventListener('input', event => {
+                    const value = Number(event.target.value);
+                    if (event.target.value.trim() && value >= -180 && value <= 180) setRotation(value);
+                });
+            }
+            document.getElementById('flipHorizontal').addEventListener('click', () => {
+                if (!cropper || !cropper.ready) return;
+                horizontalScale *= -1;
+                cropper.scaleX(horizontalScale);
+                syncRotationControls();
+            });
+            document.getElementById('flipVertical').addEventListener('click', () => {
+                if (!cropper || !cropper.ready) return;
+                verticalScale *= -1;
+                cropper.scaleY(verticalScale);
+                syncRotationControls();
+            });
 
             function showLoading() {
                 loadingOverlay.style.display = 'flex';
@@ -338,6 +413,8 @@
                     maxZoom: 100, // Allow zooming in to 10000% of original size
                     ready: function () {
                         if (requestId !== imageRequestId || !cropper) return;
+                        applyImageTransform();
+                        setToolControlsDisabled(false);
                         updateBackgroundColor(selectedBackground);
                         const cropBox = document.querySelector('.cropper-crop-box');
                         if (cropBox) {
@@ -394,7 +471,15 @@
                 });
             }
 
+            function setToolControlsDisabled(disabled) {
+                for (const id of ['cropControls', 'backgroundControls', 'rotationControls']) {
+                    document.getElementById(id).disabled = disabled;
+                }
+                if (disabled) closePresetMenu();
+            }
+
             function invalidateImageProcessing() {
+                setToolControlsDisabled(true);
                 imageRequestId += 1;
                 if (imageAbortController) {
                     imageAbortController.abort();
@@ -444,6 +529,7 @@
                     if (requestId !== imageRequestId) return;
 
                     if (resetDimensions) {
+                        resetImageTransform();
                         originalDimensions = { width: preview.naturalWidth, height: preview.naturalHeight };
                         widthInput.value = String(originalDimensions.width);
                         heightInput.value = String(originalDimensions.height);
@@ -577,6 +663,7 @@
                         currentFileName = '';
                         if (!batchContainer.children.length) {
                             originalDimensions = null;
+                            resetImageTransform();
                             widthInput.value = '';
                             heightInput.value = '';
                             document.getElementById('aspectRatioPreset').value = 'free';

@@ -93,6 +93,10 @@ function editor() {
             destroy() { this.destroyed = true; }
             setAspectRatio(ratio) { this.options.aspectRatio = ratio; }
             resize() { this.resizeCount = (this.resizeCount || 0) + 1; }
+            rotateTo(angle) { this.rotation = angle; }
+            scale(x, y) { this.horizontalScale = x; this.verticalScale = y; }
+            scaleX(value) { this.horizontalScale = value; }
+            scaleY(value) { this.verticalScale = value; }
             getData() { return { width: 640, height: 480 }; }
             getCroppedCanvas() { return { toBlob: callback => exports.push(callback) }; }
         },
@@ -131,6 +135,7 @@ function editor() {
     return {
         element, select, toggle, respond, decode, requests, decodes, croppers, exports, alerts, revoked, canvases,
         resizeCanvas: () => resizeCanvas(),
+        applyImageTransform: () => vm.runInContext('applyImageTransform()', context),
         visibleImage: () => urls.get(element('image').src),
         filename: () => vm.runInContext('currentFileName', context),
         cropper: () => vm.runInContext('cropper', context),
@@ -593,4 +598,79 @@ test('preset popup supports arrow navigation and Escape without changing the sel
     assert.equal(e.element('presetMenu').hidden, true);
     assert.equal(e.element('presetTrigger')['aria-expanded'], 'false');
     assert.equal(e.element('presetTrigger').focused, true);
+});
+
+test('rotation menu supports quarter turns and live precise angles without rebuilding the cropper', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    const cropper = e.cropper();
+    e.element('rotationTool').click();
+    assert.equal(e.element('rotationPanel').hidden, false);
+    assert.equal(e.element('toolPanelTitle').textContent, 'Rotate & flip');
+    e.element('rotateRight').click();
+    assert.equal(cropper.rotation, 90);
+    assert.equal(e.element('rotationSlider').value, '90');
+    e.element('rotateLeft').click();
+    assert.equal(cropper.rotation, 0);
+    const slider = e.element('rotationSlider');
+    slider.value = '12.3';
+    slider.dispatchEvent(new Event('input'));
+    assert.equal(cropper.rotation, 12.3);
+    assert.equal(e.element('rotationAngle').value, '12.3');
+    const angle = e.element('rotationAngle');
+    angle.value = '-7.5';
+    angle.dispatchEvent(new Event('input'));
+    assert.equal(cropper.rotation, -7.5);
+    assert.equal(slider.value, '-7.5');
+    for (const value of ['', '181', 'bad']) {
+        angle.value = value;
+        angle.dispatchEvent(new Event('input'));
+        assert.equal(cropper.rotation, -7.5);
+    }
+    assert.equal(e.cropper(), cropper);
+    assert.equal(cropper.destroyed, undefined);
+});
+
+test('flip controls toggle independently and background reprocessing preserves transforms', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.element('rotateRight').click();
+    e.element('flipHorizontal').click();
+    e.element('flipVertical').click();
+    assert.equal(e.cropper().horizontalScale, -1);
+    assert.equal(e.cropper().verticalScale, -1);
+    e.element('flipHorizontal').click();
+    assert.equal(e.cropper().horizontalScale, 1);
+    assert.equal(e.element('flipHorizontal')['aria-pressed'], 'false');
+    assert.equal(e.element('flipVertical')['aria-pressed'], 'true');
+    e.toggle(true);
+    await e.respond(e.requests[0], { name: 'cutout' });
+    await e.decode();
+    e.applyImageTransform();
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.cropper().horizontalScale, 1);
+    assert.equal(e.cropper().verticalScale, -1);
+    e.element('resetButton').click();
+    await e.respond(e.requests[1], { name: 'reset' });
+    await e.decode();
+    e.applyImageTransform();
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.cropper().verticalScale, 1);
+    assert.equal(e.element('rotationAngle').value, '0');
+});
+
+test('rotations wrap within the slider range and a new image starts untransformed', async () => {
+    const e = editor();
+    e.element('rotateRight').click();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    for (let i = 0; i < 3; i++) e.element('rotateRight').click();
+    assert.equal(e.cropper().rotation, -90);
+    e.select({ name: 'B.png' }, false);
+    await e.decode();
+    e.applyImageTransform();
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.element('rotationSlider').value, '0');
 });
