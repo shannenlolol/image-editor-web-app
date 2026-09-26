@@ -343,6 +343,186 @@ test('a delayed validation error cannot interrupt a newer selection', async () =
     assert.equal(e.filename(), 'next.png');
 });
 
+test('network failure clears the failed upload and allows uploading it again', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' });
+    e.requests[0].reject(new TypeError('Failed to fetch'));
+    await flush();
+    assert.match(e.alerts[0], /connection.*upload the image again/);
+    assert.equal(e.loading(), false);
+    assert.equal(e.cropper(), null);
+    assert.equal(e.element('downloadMenuButton').disabled, true);
+
+    assert.equal(e.element('batchImages').children.length, 0);
+    e.select({ name: 'A.png' });
+    assert.equal(e.loading(), true);
+    assert.equal(e.requests.length, 2);
+    await e.respond(e.requests[1], { name: 'recovered' });
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'recovered');
+    assert.equal(e.loading(), false);
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+    assert.equal(e.alerts.length, 1);
+});
+
+test('HTTP server errors never reach decoding and allow retry', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' });
+    e.requests[0].resolve({
+        ok: false,
+        status: 500,
+        json: async () => { throw new SyntaxError('HTML error page'); },
+        blob: () => assert.fail('An HTTP error body must not be decoded as an image'),
+    });
+    await flush();
+    assert.match(e.alerts[0], /Background removal failed.*try again/);
+    assert.equal(e.loading(), false);
+    assert.equal(e.decodes.length, 0);
+    assert.equal(e.element('batchImages').children.length, 0);
+    e.select({ name: 'A.png' });
+    await e.respond(e.requests[1], { name: 'recovered' });
+    await e.decode();
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+});
+
+test('a failed response body read clears loading and allows selecting another image', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' });
+    e.requests[0].resolve({
+        ok: true,
+        blob: async () => { throw new TypeError('Connection lost'); },
+    });
+    await flush();
+    assert.match(e.alerts[0], /read the processed image.*retry/);
+    assert.equal(e.loading(), false);
+    assert.equal(e.decodes.length, 0);
+    e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.filename(), 'B.png');
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+});
+
+test('invalid local images release their URL and allow selecting a valid image', async () => {
+    const e = editor();
+    e.select({ name: 'corrupt.png' }, false);
+    const decode = e.decodes[0];
+    decode.reject(new Error('EncodingError'));
+    await flush();
+    assert.match(e.alerts[0], /image could not be opened.*another image/);
+    assert.equal(e.revoked.has(decode.url), true);
+    assert.equal(e.loading(), false);
+    assert.equal(e.cropper(), null);
+    assert.equal(e.element('downloadMenuButton').disabled, true);
+    e.select({ name: 'valid.png' }, false);
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'valid.png');
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+    assert.equal(e.requests.length, 0);
+});
+
+test('a failed lone upload restores the empty editor and releases both image URLs', async () => {
+    const e = editor();
+    e.element('imageInput').value = 'broken.HEIC';
+    e.select({ name: 'broken.HEIC' }, false);
+    const thumbnailUrl = e.element('batchImages').firstElementChild.firstElementChild.firstElementChild.src;
+    const decode = e.decodes[0];
+    e.element('widthInput').value = '123';
+    e.element('heightInput').value = '456';
+    decode.reject(new Error('EncodingError'));
+    await flush();
+    assert.equal(e.element('batchImages').children.length, 0);
+    assert.equal(e.element('batchImages').hidden, true);
+    assert.equal(e.element('batchEmptyState').hidden, false);
+    assert.equal(e.element('uploadPlaceholder').style.display, 'flex');
+    assert.equal(e.element('widthInput').value, '');
+    assert.equal(e.element('heightInput').value, '');
+    assert.equal(e.element('aspectRatioPreset').value, 'free');
+    assert.equal(e.element('imageInput').value, '');
+    assert.equal(e.filename(), '');
+    assert.equal(e.loading(), false);
+    assert.equal(e.element('cropControls').disabled, true);
+    assert.equal(e.element('downloadMenuButton').disabled, true);
+    assert.equal(e.revoked.has(thumbnailUrl), true);
+    assert.equal(e.revoked.has(decode.url), true);
+});
+
+test('discarding a failed upload preserves another image and its saved edits', async () => {
+    const e = editor();
+    e.select({ name: 'valid.png' }, false);
+    await e.decode();
+    e.element('widthInput').value = '300';
+    e.element('heightInput').value = '200';
+    e.element('widthInput').dispatchEvent(new Event('input'));
+    e.element('rotateRight').click();
+    e.select({ name: 'broken.HEIC' }, false);
+    e.decodes.at(-1).reject(new Error('EncodingError'));
+    await flush();
+    assert.equal(e.element('batchImages').children.length, 1);
+    assert.equal(e.filename(), 'valid.png');
+    assert.equal(e.loading(), true);
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'valid.png');
+    assert.equal(e.element('widthInput').value, '300');
+    assert.equal(e.element('heightInput').value, '200');
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.element('uploadPlaceholder').style.display, 'none');
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+});
+
+test('a batch of invalid uploads eventually restores the upload overlay', async () => {
+    const e = editor();
+    e.element('removeBg').checked = false;
+    e.upload([{ name: 'bad1.png' }, { name: 'bad2.png' }]);
+    e.decodes[0].reject(new Error('EncodingError'));
+    await flush();
+    assert.equal(e.filename(), 'bad2.png');
+    assert.equal(e.loading(), true);
+    e.decodes[1].reject(new Error('EncodingError'));
+    await flush();
+    assert.equal(e.element('batchImages').children.length, 0);
+    assert.equal(e.element('uploadPlaceholder').style.display, 'flex');
+    assert.equal(e.loading(), false);
+});
+
+test('an invalid processed image releases its URL and can be retried', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' });
+    await e.respond(e.requests[0], { name: 'invalid response' });
+    const decode = e.decodes[0];
+    decode.reject(new Error('EncodingError'));
+    await flush();
+    assert.match(e.alerts[0], /processed image could not be opened.*retry/);
+    assert.equal(e.revoked.has(decode.url), true);
+    assert.equal(e.loading(), false);
+    assert.equal(e.cropper(), null);
+    assert.equal(e.element('batchImages').children.length, 0);
+    e.select({ name: 'A.png' });
+    await e.respond(e.requests[1], { name: 'valid response' });
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'valid response');
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+});
+
+test('a stale decoding failure cannot interrupt a newer image or its loading indicator', async () => {
+    for (const finishNewImage of [false, true]) {
+        const e = editor();
+        e.select({ name: 'corrupt.png' }, false);
+        const oldDecode = e.decodes[0];
+        e.select({ name: 'valid.png' }, false);
+        const newDecode = e.decodes[1];
+        if (finishNewImage) await e.decode(newDecode);
+        oldDecode.reject(new Error('EncodingError'));
+        await flush();
+        assert.deepEqual(e.alerts, []);
+        assert.equal(e.loading(), !finishNewImage);
+        assert.equal(e.revoked.has(oldDecode.url), true);
+        assert.equal(e.revoked.has(newDecode.url), false);
+        if (!finishNewImage) await e.decode(newDecode);
+        assert.equal(e.visibleImage().name, 'valid.png');
+        assert.equal(e.element('downloadMenuButton').disabled, false);
+    }
+});
+
 test('an older response cannot replace the latest image or filename', async () => {
     const e = editor();
     e.select({ name: 'A.png' });

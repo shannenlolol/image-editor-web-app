@@ -180,6 +180,7 @@ window.ImageEditor = (() => {
         const controller = new AbortController();
         imageAbortController = controller;
         let url = null;
+        let failureMessage = 'Could not open this image. Try another image file.';
         showLoading();
 
         try {
@@ -187,6 +188,7 @@ window.ImageEditor = (() => {
             if (shouldRemoveBg) {
                 const formData = new FormData();
                 formData.append('file', file);
+                failureMessage = 'Could not reach background removal. Check your connection and upload the image again to retry.';
                 const response = await fetch('/remove-bg', {
                     method: 'POST',
                     body: formData,
@@ -208,16 +210,21 @@ window.ImageEditor = (() => {
                     }
                     throw error;
                 }
+                failureMessage = 'Could not read the processed image. Upload the image again to retry.';
                 blob = await response.blob();
             }
             if (requestId !== imageRequestId) return;
 
             // Decode separately so an old image-load event cannot update the editor.
+            failureMessage = shouldRemoveBg
+                ? 'The processed image could not be opened. Upload the image again to retry.'
+                : 'This image could not be opened. Try another image file.';
             url = URL.createObjectURL(blob);
             const preview = new Image();
             preview.src = url;
             await preview.decode();
             if (requestId !== imageRequestId) return;
+            failureMessage = 'Could not prepare the editor. Upload the image again to retry.';
 
             if (resetEdits) {
                 controls.resetImageTransform();
@@ -240,7 +247,10 @@ window.ImageEditor = (() => {
                 return;
             record.status = 'error';
             console.error('Error:', error);
-            alert(error.userMessage || 'Error processing image. Please try again.');
+            if (url && url !== displayedImageUrl) URL.revokeObjectURL(url);
+            url = null;
+            removeImage(file);
+            alert(error.userMessage || failureMessage);
         } finally {
             if (url && url !== displayedImageUrl) URL.revokeObjectURL(url);
             if (requestId === imageRequestId) {
@@ -383,6 +393,47 @@ window.ImageEditor = (() => {
         });
     updateBatchEmptyState();
 
+    // Share cleanup between explicit deletion and failed uploads.
+    function removeImage(file) {
+        const batchContainer = document.getElementById('batchImages');
+        const thumbnail = Array.from(batchContainer.children).find(
+            (item) => item.imageFile === file,
+        );
+        if (!thumbnail) return;
+        const thumbnailImage = thumbnail.firstElementChild.firstElementChild;
+        thumbnail.remove();
+        imageRecords.delete(file);
+        URL.revokeObjectURL(thumbnailImage.src);
+        updateBatchEmptyState();
+        if (
+            selectedFile === file ||
+            batchContainer.children.length === 0
+        ) {
+            invalidateImageProcessing();
+            hideLoading();
+            document.getElementById('uploadPlaceholder').style.display =
+                'flex';
+            selectedFile = null;
+            selectedFileName = '';
+            if (!batchContainer.children.length) {
+                sourceDimensions = null;
+                controls.resetImageTransform();
+                widthInput.value = '';
+                heightInput.value = '';
+                document.getElementById('aspectRatioPreset').value = 'free';
+                controls.syncPresetMenu();
+            }
+            if (batchContainer.firstElementChild) {
+                batchContainer.firstElementChild.click();
+            }
+        }
+        updateSelectedThumbnail();
+        const nextThumbnail = batchContainer.firstElementChild;
+        if (nextThumbnail) nextThumbnail.firstElementChild.focus();
+        else document.getElementById('batchUploadButton').focus();
+        fileInput.value = '';
+    }
+
     function addToBatchImages(file) {
         const batchContainer = document.getElementById('batchImages');
         const thumbnail = document.createElement('div');
@@ -405,36 +456,7 @@ window.ImageEditor = (() => {
         removeButton.innerHTML = '×';
         removeButton.onclick = (e) => {
             e.stopPropagation();
-            thumbnail.remove();
-            imageRecords.delete(file);
-            URL.revokeObjectURL(thumbnailImage.src);
-            updateBatchEmptyState();
-            if (
-                selectedFile === file ||
-                batchContainer.children.length === 0
-            ) {
-                invalidateImageProcessing();
-                hideLoading();
-                document.getElementById('uploadPlaceholder').style.display =
-                    'flex';
-                selectedFile = null;
-                selectedFileName = '';
-                if (!batchContainer.children.length) {
-                    sourceDimensions = null;
-                    controls.resetImageTransform();
-                    widthInput.value = '';
-                    heightInput.value = '';
-                    document.getElementById('aspectRatioPreset').value = 'free';
-                    controls.syncPresetMenu();
-                }
-                if (batchContainer.firstElementChild) {
-                    batchContainer.firstElementChild.click();
-                }
-            }
-            updateSelectedThumbnail();
-            const nextThumbnail = batchContainer.firstElementChild;
-            if (nextThumbnail) nextThumbnail.firstElementChild.focus();
-            else document.getElementById('batchUploadButton').focus();
+            removeImage(file);
         };
 
         const filenameLabel = document.createElement('span');
