@@ -53,13 +53,7 @@
 
             <div class="sidebar">
                 <div class="editor-controls">
-                    <div class="control-section">
-                        <h3>Background</h3>
-                        <div class="checkbox-container">
-                            <input type="checkbox" id="removeBg">
-                            <label for="removeBg">Remove Background</label>
-                        </div>
-                    </div>
+
 
                     <div class="control-section">
                         <h3>Resolution</h3>
@@ -92,10 +86,12 @@
                     </div>
 
                     <div class="control-section">
-                        <h3>Reset Image</h3>
-                        <button id="resetButton" class="reset-button">Reset to Original</button>
+                        <h3>Background</h3>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="removeBg">
+                            <label for="removeBg">Remove Background</label>
+                        </div>
                     </div>
-
                     <div class="control-section">
                         <h3>Background Color</h3>
                         <div class="color-picker-container">
@@ -105,7 +101,23 @@
                     </div>
 
                     <div class="control-section">
-                        <h3>Batch Images</h3>
+                        <h3>Reset Image</h3>
+                        <button id="resetButton" class="reset-button">Reset to Original</button>
+                    </div>
+                    
+                    <div class="control-section">
+                        <h3>Images</h3>
+                        <div class="batch-empty-state" id="batchEmptyState">
+                            <svg class="batch-empty-icon" width="32" height="32" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
+                                <rect x="6" y="3" width="15" height="15" rx="2"></rect>
+                                <path d="M3 7v12a2 2 0 0 0 2 2h12M6 14l4-4 4 4 3-3 4 4"></path>
+                                <circle cx="16" cy="7" r="1"></circle>
+                            </svg>
+                            <p class="batch-empty-title">No images yet</p>
+                            <p class="batch-empty-description">Upload images to see them here.</p>
+                            <button type="button" id="batchUploadButton" class="upload-btn">Upload Images</button>
+                        </div>
                         <div class="batch-images" id="batchImages">
                             <!-- Batch images will be added here dynamically -->
                         </div>
@@ -395,6 +407,17 @@
                 });
             }
 
+            function updateBatchEmptyState() {
+                const isEmpty = document.getElementById('batchImages').children.length === 0;
+                document.getElementById('batchEmptyState').hidden = !isEmpty;
+                document.getElementById('batchImages').hidden = isEmpty;
+            }
+
+            document.getElementById('batchUploadButton').addEventListener('click', () => {
+                inputElement.click();
+            });
+            updateBatchEmptyState();
+
             function addToBatchImages(file) {
                 const batchContainer = document.getElementById('batchImages');
                 const thumbnail = document.createElement('div');
@@ -409,6 +432,7 @@
                 removeBtn.onclick = (e) => {
                     e.stopPropagation();
                     thumbnail.remove();
+                    updateBatchEmptyState();
                     if (originalImage === file || batchContainer.children.length === 0) {
                         invalidateImageProcessing();
                         hideLoading();
@@ -428,6 +452,7 @@
                 thumbnail.appendChild(removeBtn);
                 thumbnail.appendChild(name);
                 batchContainer.appendChild(thumbnail);
+                updateBatchEmptyState();
 
                 thumbnail.addEventListener('click', () => {
                     originalImage = file;  // Store the clicked image as original
