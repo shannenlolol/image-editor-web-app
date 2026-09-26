@@ -788,6 +788,55 @@ test('preset popup selects a ratio, updates dimensions, and returns focus to the
     assert.equal(e.element('presetTrigger').focused, true);
 });
 
+test('a touch blur does not dismiss the preset before its click', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.element('presetTrigger').click();
+    const blur = new Event('focusout');
+    blur.relatedTarget = null;
+    e.element('presetDropdown').dispatchEvent(blur);
+    assert.equal(e.element('presetMenu').hidden, false);
+    e.element('presetPortrait').click();
+    assert.equal(e.element('aspectRatioPreset').value, '0.8');
+    assert.equal(e.element('presetMenu').hidden, true);
+});
+
+test('a touch blur does not dismiss the download option before its click', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.element('downloadMenuButton').click();
+    const blur = new Event('focusout');
+    blur.relatedTarget = null;
+    e.element('downloadControl').dispatchEvent(blur);
+    assert.equal(e.element('downloadMenu').hidden, false);
+    e.element('downloadCurrent').click();
+    assert.equal(e.exports.length, 1);
+    e.exports[0](new Blob(['png'], { type: 'image/png' }));
+    await flush();
+    assert.equal(e.downloads.length, 1);
+    assert.equal(e.downloads[0].filename, 'edited_A.png');
+    assert.equal(e.element('downloadMenu').hidden, true);
+});
+
+test('menus still close when keyboard focus moves to another control', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    for (const [trigger, container, menu] of [
+        ['presetTrigger', 'presetDropdown', 'presetMenu'],
+        ['downloadMenuButton', 'downloadControl', 'downloadMenu'],
+    ]) {
+        e.element(trigger).click();
+        const blur = new Event('focusout');
+        blur.relatedTarget = e.element('zoomIn');
+        e.element(container).dispatchEvent(blur);
+        assert.equal(e.element(menu).hidden, true);
+        assert.equal(e.element(trigger)['aria-expanded'], 'false');
+    }
+});
+
 test('preset popup supports arrow navigation and Escape without changing the selection', () => {
     const e = editor();
     e.element('presetTrigger').click();

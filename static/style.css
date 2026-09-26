@@ -318,8 +318,8 @@ body {
 }
 
 .zoom-controls button {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   font-size: 18px;
   font-weight: bold;
@@ -550,6 +550,12 @@ body {
 /* Buttons */
 .upload-btn,
 .download-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
   font-size: 14px;
   padding: 8px 16px;
   border-radius: 25px;
@@ -809,14 +815,6 @@ input:focus-visible {
   }
   .nav-right {
     gap: 8px;
-  }
-  .nav-right .upload-btn,
-  .download-btn {
-    min-height: 44px;
-    box-sizing: border-box;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
   }
   .main-container {
     flex: none;
@@ -1209,4 +1207,26 @@ input:focus-visible {
   color: #2c3e50;
   background: #edf4fc;
   font-size: 13px;
+}
+
+/* Keep the visible crop handles small while providing a comfortable touch target. */
+@media (pointer: coarse) {
+  .cropper-crop-box .cropper-point::before {
+    content: "";
+    position: absolute;
+    width: 44px;
+    height: 44px;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  /* Avoid automatic input zoom on iOS, which displaces the canvas and controls. */
+  .dimension-row input {
+    font-size: 16px;
+  }
 }

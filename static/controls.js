@@ -116,7 +116,10 @@
         }
     });
     presetDropdown.addEventListener('focusout', (event) => {
-        if (!presetDropdown.contains(event.relatedTarget)) closePresetMenu();
+        // Safari taps can blur a button without focusing another element. Keep
+        // the menu available for the ensuing click; outside clicks close it below.
+        if (event.relatedTarget && !presetDropdown.contains(event.relatedTarget))
+            closePresetMenu();
     });
     document.addEventListener('click', (event) => {
         if (!presetDropdown.contains(event.target)) closePresetMenu();
@@ -465,7 +468,8 @@
         }
     });
     downloadControl.addEventListener('focusout', (event) => {
-        if (!downloadControl.contains(event.relatedTarget)) closeDownloadMenu();
+        if (event.relatedTarget && !downloadControl.contains(event.relatedTarget))
+            closeDownloadMenu();
     });
     document.addEventListener('click', (event) => {
         if (!downloadControl.contains(event.target)) closeDownloadMenu();
