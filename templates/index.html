@@ -29,7 +29,72 @@
         </nav>
 
 
-        <div class="main-container">
+        <main class="main-container">
+            <nav class="tool-rail" aria-label="Editing tools">
+                <button type="button" id="cropTool" class="tool-button" aria-label="Crop" title="Crop" aria-controls="cropPanel" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v13a2 2 0 0 0 2 2h13M3 6h13a2 2 0 0 1 2 2v13"/></svg></button>
+                <button type="button" id="backgroundTool" class="tool-button" aria-label="Background" title="Background" aria-controls="backgroundPanel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 3v18"/><path d="M12 7h9M12 12h9M12 17h9"/></svg></button>
+                <button type="button" id="resetButton" class="tool-button reset-tool" aria-label="Reset to Original" title="Reset to Original"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg></button>
+            </nav>
+            <aside class="tool-panel" id="toolPanel" aria-label="Tool settings">
+                <div class="tool-panel-header">
+                    <h2 id="toolPanelTitle">Crop</h2>
+                    <button type="button" id="closeToolPanel" class="icon-button" aria-label="Close tool panel" title="Close tool panel">×</button>
+                </div>
+                <section id="cropPanel" aria-labelledby="cropTool">
+                    <div class="control-section resolution-fields">
+                        <div class="dimension-row">
+                            <label for="widthInput">Width</label>
+                            <input type="number" id="widthInput" aria-label="Width in pixels" min="1" step="1">
+                        </div>
+                        <div class="dimension-row">
+                            <label for="heightInput">Height</label>
+                            <input type="number" id="heightInput" aria-label="Height in pixels" min="1" step="1">
+                        </div>
+                    </div>
+                    <div class="control-section">
+                        <label class="control-label" id="presetLabel" for="presetTrigger">Preset</label>
+                        <div class="preset-dropdown" id="presetDropdown">
+                            <button type="button" id="presetTrigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="presetMenu" aria-labelledby="presetLabel presetValue"><span id="presetValue">None</span><span aria-hidden="true">⌄</span></button>
+                            <div id="presetMenu" class="preset-menu" role="listbox" aria-labelledby="presetLabel" hidden>
+                                <button type="button" id="presetFree" role="option" aria-selected="true" tabindex="-1">None</button>
+                                <button type="button" id="presetOriginal" role="option" aria-selected="false" tabindex="-1">Original</button>
+                                <button type="button" id="presetSquare" role="option" aria-selected="false" tabindex="-1">1:1 (Square)</button>
+                                <button type="button" id="presetPortrait" role="option" aria-selected="false" tabindex="-1">4:5 (Portrait)</button>
+                                <button type="button" id="presetStory" role="option" aria-selected="false" tabindex="-1">9:16 (Story)</button>
+                            </div>
+                        </div>
+                        <select id="aspectRatioPreset" hidden aria-hidden="true" tabindex="-1">
+                            <option value="free">None</option>
+                            <option value="original">Original</option>
+                            <option value="1">1:1 (Square)</option>
+                            <option value="0.8">4:5 (Portrait)</option>
+                            <option value="0.5625">9:16 (Story)</option>
+                            <option value="custom" disabled hidden>Custom</option>
+                        </select>
+                    </div>
+                </section>
+                <section id="backgroundPanel" aria-labelledby="backgroundTool" hidden>
+                    <div class="background-removal-row">
+                        <div>
+                            <label for="removeBg">Remove background</label>
+                            <p id="removeBgHelp">Cuts out the subject automatically</p>
+                        </div>
+                        <input type="checkbox" id="removeBg" class="background-switch" role="switch" aria-describedby="removeBgHelp">
+                    </div>
+                    <fieldset class="background-replacements" id="backgroundReplacements">
+                        <legend>Background Colour</legend>
+                        <div class="background-swatches">
+                            <button type="button" id="transparentBg" class="background-swatch transparent-swatch" aria-label="Transparent background" aria-pressed="true" title="Transparent"></button>
+                            <button type="button" id="whiteBg" class="background-swatch white-swatch" aria-label="White background" aria-pressed="false" title="White"></button>
+                            <button type="button" id="blackBg" class="background-swatch black-swatch" aria-label="Black background" aria-pressed="false" title="Black"></button>
+                            <div class="custom-background">
+                                <button type="button" id="customBg" class="background-swatch custom-swatch" aria-label="Custom background colour" aria-pressed="false" title="Custom colour">+</button>
+                                <input type="color" id="bgColor" value="#ffffff" aria-label="Custom background colour picker" tabindex="-1">
+                            </div>
+                        </div>
+                    </fieldset>
+                </section>
+            </aside>
             <div class="editor-section">
                 <div class="image-container" id="dropZone">
                     <div class="loading-overlay" id="loadingOverlay">
@@ -51,80 +116,16 @@
                 </div>
             </div>
 
-            <div class="sidebar">
-                <div class="editor-controls">
 
-
-                    <div class="control-section">
-                        <h3>Resolution</h3>
-                        <div class="resolution-input">
-                            <input type="number" id="widthInput" placeholder="Width" min="1">
-                            <span>×</span>
-                            <input type="number" id="heightInput" placeholder="Height" min="1">
-                        </div>
-                        <div class="resolution-presets">
-                            <button data-width="1920" data-height="1080">1920×1080</button>
-                            <button data-width="1280" data-height="720">1280×720</button>
-                            <button data-width="800" data-height="600">800×600</button>
-                        </div>
-                        <!-- Moved Apply Button -->
-                        <div class="resolution-apply">
-                            <button id="applyResolution">Apply</button>
-                        </div>
-
-                    </div>
-
-                    <div class="control-section">
-                        <h3>Aspect Ratio</h3>
-                        <div class="aspect-ratio-controls">
-                            <button id="aspectRatioFree">Free</button>
-                            <button id="aspectRatioOriginal">Original</button>
-                            <button id="aspectRatio1_1">1:1</button>
-                            <button id="aspectRatio4_5">4:5</button>
-                            <button id="aspectRatio9_16">9:16</button>
-                        </div>
-                    </div>
-
-                    <div class="control-section">
-                        <h3>Background</h3>
-                        <div class="checkbox-container">
-                            <input type="checkbox" id="removeBg">
-                            <label for="removeBg">Remove Background</label>
-                        </div>
-                    </div>
-                    <div class="control-section">
-                        <h3>Background Color</h3>
-                        <div class="color-picker-container">
-                            <input type="color" id="bgColor" value="#ffffff">
-                            <button id="transparentBg">Transparent</button>
-                        </div>
-                    </div>
-
-                    <div class="control-section">
-                        <h3>Reset Image</h3>
-                        <button id="resetButton" class="reset-button">Reset to Original</button>
-                    </div>
-                    
-                    <div class="control-section">
-                        <h3>Images</h3>
-                        <div class="batch-empty-state" id="batchEmptyState">
-                            <svg class="batch-empty-icon" width="32" height="32" viewBox="0 0 24 24" fill="none"
-                                stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
-                                <rect x="6" y="3" width="15" height="15" rx="2"></rect>
-                                <path d="M3 7v12a2 2 0 0 0 2 2h12M6 14l4-4 4 4 3-3 4 4"></path>
-                                <circle cx="16" cy="7" r="1"></circle>
-                            </svg>
-                            <p class="batch-empty-title">No images yet</p>
-                            <p class="batch-empty-description">Upload images to see them here.</p>
-                            <button type="button" id="batchUploadButton" class="upload-btn">Upload Images</button>
-                        </div>
-                        <div class="batch-images" id="batchImages">
-                            <!-- Batch images will be added here dynamically -->
-                        </div>
-                    </div>
+            <aside class="images-rail" aria-labelledby="imagesTitle">
+                <h2 id="imagesTitle">Images</h2>
+                <div class="batch-empty-state" id="batchEmptyState">
+                    <p class="batch-empty-title">No images yet</p>
                 </div>
-            </div>
-        </div>
+                <div class="batch-images" id="batchImages" hidden></div>
+                <button type="button" id="batchUploadButton" class="batch-upload-button">+ Add images</button>
+            </aside>
+        </main>
 
         <!-- Include the Cropper JS file -->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.9/cropper.min.js"></script>
@@ -135,6 +136,8 @@
             let imageAbortController = null;
             let displayedImageUrl = null;
             let currentFileName = '';
+            let originalDimensions = null;
+            let selectedBackground = 'transparent';
             const imageElement = document.getElementById('image');
             const inputElement = document.getElementById('imageInput');
             const removeBgCheckbox = document.getElementById('removeBg');
@@ -144,6 +147,121 @@
             const transparentBgButton = document.getElementById('transparentBg');
             const loadingOverlay = document.getElementById('loadingOverlay');
             const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+
+            const toolPanel = document.getElementById('toolPanel');
+            const toolButtons = {
+                crop: document.getElementById('cropTool'),
+                background: document.getElementById('backgroundTool'),
+            };
+            let activeTool = 'crop';
+
+            const presetSelect = document.getElementById('aspectRatioPreset');
+            const presetTrigger = document.getElementById('presetTrigger');
+            const presetMenu = document.getElementById('presetMenu');
+            const presetDropdown = document.getElementById('presetDropdown');
+            const presetChoices = [
+                ['free', 'presetFree', 'None'],
+                ['original', 'presetOriginal', 'Original'],
+                ['1', 'presetSquare', '1:1 (Square)'],
+                ['0.8', 'presetPortrait', '4:5 (Portrait)'],
+                ['0.5625', 'presetStory', '9:16 (Story)'],
+            ];
+            let presetOpen = false;
+            let focusedPreset = 0;
+
+            function syncPresetMenu() {
+                const choice = presetChoices.find(([value]) => value === presetSelect.value);
+                document.getElementById('presetValue').textContent = choice ? choice[2] : 'Custom';
+                for (const [value, id] of presetChoices) {
+                    document.getElementById(id).setAttribute('aria-selected', String(value === presetSelect.value));
+                }
+            }
+
+            function closePresetMenu(restoreFocus = false) {
+                presetOpen = false;
+                presetMenu.hidden = true;
+                presetTrigger.setAttribute('aria-expanded', 'false');
+                if (restoreFocus) presetTrigger.focus();
+            }
+
+            function focusPreset(index) {
+                focusedPreset = (index + presetChoices.length) % presetChoices.length;
+                document.getElementById(presetChoices[focusedPreset][1]).focus();
+            }
+
+            function openPresetMenu() {
+                syncPresetMenu();
+                presetOpen = true;
+                presetMenu.hidden = false;
+                presetTrigger.setAttribute('aria-expanded', 'true');
+                focusPreset(Math.max(0, presetChoices.findIndex(([value]) => value === presetSelect.value)));
+            }
+
+            presetTrigger.addEventListener('click', () => presetOpen ? closePresetMenu() : openPresetMenu());
+            presetTrigger.addEventListener('keydown', event => {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    openPresetMenu();
+                }
+            });
+            for (const [value, id] of presetChoices) {
+                document.getElementById(id).addEventListener('click', () => {
+                    presetSelect.value = value;
+                    presetSelect.dispatchEvent(new Event('change'));
+                    syncPresetMenu();
+                    closePresetMenu(true);
+                });
+            }
+            presetMenu.addEventListener('keydown', event => {
+                if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape'].includes(event.key)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (event.key === 'Escape') closePresetMenu(true);
+                    else if (event.key === 'Home') focusPreset(0);
+                    else if (event.key === 'End') focusPreset(presetChoices.length - 1);
+                    else focusPreset(focusedPreset + (event.key === 'ArrowDown' ? 1 : -1));
+                }
+            });
+            presetDropdown.addEventListener('focusout', event => {
+                if (!presetDropdown.contains(event.relatedTarget)) closePresetMenu();
+            });
+            document.addEventListener('click', event => {
+                if (!presetDropdown.contains(event.target)) closePresetMenu();
+            });
+
+
+            function setActiveTool(tool) {
+                closePresetMenu();
+                activeTool = tool;
+                toolPanel.hidden = !tool;
+                for (const name of Object.keys(toolButtons)) {
+                    toolButtons[name].setAttribute('aria-expanded', String(name === tool));
+                    document.getElementById(name + 'Panel').hidden = name !== tool;
+                }
+                if (tool) document.getElementById('toolPanelTitle').textContent = tool === 'crop' ? 'Crop' : 'Background';
+            }
+
+            for (const [name, button] of Object.entries(toolButtons)) {
+                button.addEventListener('click', () => setActiveTool(activeTool === name ? null : name));
+            }
+            function closeToolPanel() {
+                const previousTool = activeTool;
+                setActiveTool(null);
+                if (previousTool) toolButtons[previousTool].focus();
+            }
+            document.getElementById('closeToolPanel').addEventListener('click', closeToolPanel);
+            toolPanel.addEventListener('keydown', event => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeToolPanel();
+                }
+            });
+            // Let Cropper preserve its crop data when the available canvas space changes.
+            if (typeof ResizeObserver !== 'undefined') {
+                new ResizeObserver(() => {
+                    if (cropper && cropper.ready) cropper.resize();
+                }).observe(document.getElementById('dropZone'));
+            }
 
             function showLoading() {
                 loadingOverlay.style.display = 'flex';
@@ -172,13 +290,11 @@
                         preview.style.background = color === 'transparent' ? bgPattern : color;
                     }
 
-                    // Force a redraw of the cropper
-                    cropper.clear();
-                    cropper.crop();
+
                 }
             }
 
-            function initCropper(width = null, height = null) {
+            function initCropper() {
                 const requestId = imageRequestId;
                 if (cropper) {
                     cropper.destroy();
@@ -186,9 +302,14 @@
 
                 imageElement.style.display = 'block';
                 uploadPlaceholder.style.display = 'none';
+                const preset = document.getElementById('aspectRatioPreset');
+                const ratio = preset.value === 'free' ? NaN
+                    : preset.value === 'original' ? originalDimensions.width / originalDimensions.height
+                    : preset.value === 'custom' ? Number(widthInput.value) / Number(heightInput.value)
+                    : Number(preset.value);
 
                 const options = {
-                    aspectRatio: width && height ? width / height : NaN,
+                    aspectRatio: ratio,
                     viewMode: 0, // Changed back to viewMode 0 for completely free movement
                     autoCropArea: 1,
                     background: true,
@@ -201,7 +322,7 @@
                     guides: true,
                     dragMode: 'crop',
                     toggleDragModeOnDblclick: true,
-                    fillColor: bgColorInput.value,
+                    fillColor: selectedBackground,
                     minContainerWidth: 0,
                     minContainerHeight: 0,
                     minCropBoxWidth: 10,
@@ -217,6 +338,7 @@
                     maxZoom: 100, // Allow zooming in to 10000% of original size
                     ready: function () {
                         if (requestId !== imageRequestId || !cropper) return;
+                        updateBackgroundColor(selectedBackground);
                         const cropBox = document.querySelector('.cropper-crop-box');
                         if (cropBox) {
                             cropBox.style.cursor = 'move';
@@ -291,7 +413,7 @@
                 }
             }
 
-            async function processImage(file, shouldRemoveBg = true) {
+            async function processImage(file, shouldRemoveBg = true, resetDimensions = true) {
                 invalidateImageProcessing();
                 const requestId = imageRequestId;
                 const controller = new AbortController();
@@ -321,6 +443,13 @@
                     await preview.decode();
                     if (requestId !== imageRequestId) return;
 
+                    if (resetDimensions) {
+                        originalDimensions = { width: preview.naturalWidth, height: preview.naturalHeight };
+                        widthInput.value = String(originalDimensions.width);
+                        heightInput.value = String(originalDimensions.height);
+                        document.getElementById('aspectRatioPreset').value = 'free';
+                        syncPresetMenu();
+                    }
                     imageElement.src = url;
                     displayedImageUrl = url;
                     initCropper();
@@ -340,35 +469,26 @@
             // Handle background removal toggle
             removeBgCheckbox.addEventListener('change', function () {
                 if (originalImage) {
-                    processImage(originalImage, this.checked);
+                    processImage(originalImage, this.checked, false);
                 }
             });
 
-            // Resolution presets
-            document.querySelector('.resolution-presets').addEventListener('click', (e) => {
-                if (e.target.tagName === 'BUTTON') {
-                    const width = parseInt(e.target.dataset.width);
-                    const height = parseInt(e.target.dataset.height);
-                    widthInput.value = width;
-                    heightInput.value = height;
-                    if (cropper) {
-                        initCropper(width, height);
-                    }
-                }
-            });
+            // Ignore incomplete values while typing, and update without rebuilding the editor.
+            function applyResolution() {
+                const width = Number(widthInput.value);
+                const height = Number(heightInput.value);
+                if (!cropper || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)
+                    || width <= 0 || height <= 0) return;
 
-            // Apply custom resolution
-            document.getElementById('applyResolution').addEventListener('click', () => {
-                const width = parseInt(widthInput.value);
-                const height = parseInt(heightInput.value);
-                if (width > 0 && height > 0) {
-                    if (cropper) {
-                        initCropper(width, height);
-                    }
-                } else {
-                    alert('Please enter valid width and height values');
-                }
-            });
+                const ratio = width / height;
+                cropper.setAspectRatio(ratio);
+                document.getElementById('aspectRatioPreset').value =
+                    [1, 0.8, 0.5625].includes(ratio) ? String(ratio) : 'custom';
+                syncPresetMenu();
+            }
+
+            widthInput.addEventListener('input', applyResolution);
+            heightInput.addEventListener('input', applyResolution);
 
             // Handle drag and drop functionality
             const dropZone = document.getElementById('dropZone');
@@ -413,6 +533,12 @@
                 document.getElementById('batchImages').hidden = isEmpty;
             }
 
+            function updateSelectedThumbnail() {
+                for (const thumbnail of document.getElementById('batchImages').children) {
+                    thumbnail.firstElementChild.setAttribute('aria-pressed', String(thumbnail.imageFile === originalImage));
+                }
+            }
+
             document.getElementById('batchUploadButton').addEventListener('click', () => {
                 inputElement.click();
             });
@@ -422,16 +548,26 @@
                 const batchContainer = document.getElementById('batchImages');
                 const thumbnail = document.createElement('div');
                 thumbnail.className = 'batch-thumbnail';
+                thumbnail.imageFile = file;
 
                 const img = document.createElement('img');
                 img.src = URL.createObjectURL(file);
+                img.alt = '';
+                const selectBtn = document.createElement('button');
+                selectBtn.type = 'button';
+                selectBtn.className = 'thumbnail-select';
+                selectBtn.setAttribute('aria-label', 'Edit ' + file.name);
+                selectBtn.appendChild(img);
 
                 const removeBtn = document.createElement('button');
                 removeBtn.className = 'remove-btn';
+                removeBtn.type = 'button';
+                removeBtn.setAttribute('aria-label', 'Remove ' + file.name);
                 removeBtn.innerHTML = '×';
                 removeBtn.onclick = (e) => {
                     e.stopPropagation();
                     thumbnail.remove();
+                    URL.revokeObjectURL(img.src);
                     updateBatchEmptyState();
                     if (originalImage === file || batchContainer.children.length === 0) {
                         invalidateImageProcessing();
@@ -439,24 +575,37 @@
                         document.getElementById('uploadPlaceholder').style.display = 'flex';
                         originalImage = null;
                         currentFileName = '';
+                        if (!batchContainer.children.length) {
+                            originalDimensions = null;
+                            widthInput.value = '';
+                            heightInput.value = '';
+                            document.getElementById('aspectRatioPreset').value = 'free';
+                        syncPresetMenu();
+                        }
                         if (batchContainer.firstElementChild) {
                             batchContainer.firstElementChild.click();
                         }
                     }
+                    updateSelectedThumbnail();
+                    const nextThumbnail = batchContainer.firstElementChild;
+                    if (nextThumbnail) nextThumbnail.firstElementChild.focus();
+                    else document.getElementById('batchUploadButton').focus();
                 };
 
                 const name = document.createElement('span');
                 name.textContent = file.name;
 
-                thumbnail.appendChild(img);
+                selectBtn.appendChild(name);
+                thumbnail.appendChild(selectBtn);
                 thumbnail.appendChild(removeBtn);
-                thumbnail.appendChild(name);
                 batchContainer.appendChild(thumbnail);
                 updateBatchEmptyState();
+                updateSelectedThumbnail();
 
                 thumbnail.addEventListener('click', () => {
                     originalImage = file;  // Store the clicked image as original
                     currentFileName = file.name;  // Update current file name
+                    updateSelectedThumbnail();
                     document.getElementById('uploadPlaceholder').style.display = 'none';
                     document.getElementById('image').style.display = 'block';
                     processImage(file, removeBgCheckbox.checked);
@@ -478,67 +627,46 @@
                 }
             });
 
-            // Function to update active aspect ratio button
-            function updateActiveAspectRatio(activeButton) {
-                document.querySelectorAll('.aspect-ratio-controls button').forEach(button => {
-                    button.classList.remove('active');
-                });
-                if (activeButton) {
-                    activeButton.classList.add('active');
+            document.getElementById('aspectRatioPreset').addEventListener('change', function () {
+                syncPresetMenu();
+                if (!cropper) return;
+                const ratio = this.value === 'original'
+                    ? originalDimensions.width / originalDimensions.height
+                    : this.value === 'free' ? NaN : Number(this.value);
+                cropper.setAspectRatio(ratio);
+                if (this.value === 'original') {
+                    widthInput.value = String(originalDimensions.width);
+                    heightInput.value = String(originalDimensions.height);
+                } else if (Number.isFinite(ratio) && ratio > 0) {
+                    // Use the updated crop's pixel width, not stale output dimensions.
+                    const width = Math.max(1, Math.round(cropper.getData().width));
+                    widthInput.value = String(width);
+                    heightInput.value = String(Math.max(1, Math.round(width / ratio)));
                 }
+            });
+
+            function selectBackground(color, activeButton) {
+                selectedBackground = color;
+                for (const id of ['transparentBg', 'whiteBg', 'blackBg', 'customBg']) {
+                    document.getElementById(id).setAttribute('aria-pressed', String(id === activeButton));
+                }
+                updateBackgroundColor(color);
             }
 
-            // Aspect ratio buttons
-            document.getElementById('aspectRatioFree').addEventListener('click', function () {
-                if (cropper) {
-                    updateActiveAspectRatio(this);
-                    cropper.destroy();
-                    initCropper();
-                }
-            });
-
-            document.getElementById('aspectRatioOriginal').addEventListener('click', function () {
-                if (cropper) {
-                    updateActiveAspectRatio(this);
-                    const originalAspectRatio = imageElement.naturalWidth / imageElement.naturalHeight;
-                    cropper.destroy();
-                    initCropper(imageElement.naturalWidth, imageElement.naturalHeight);
-                }
-            });
-
-            document.getElementById('aspectRatio1_1').addEventListener('click', function () {
-                if (cropper) {
-                    updateActiveAspectRatio(this);
-                    cropper.destroy();
-                    initCropper(1000, 1000);
-                }
-            });
-
-            document.getElementById('aspectRatio4_5').addEventListener('click', function () {
-                if (cropper) {
-                    updateActiveAspectRatio(this);
-                    cropper.destroy();
-                    initCropper(800, 1000);
-                }
-            });
-
-            document.getElementById('aspectRatio9_16').addEventListener('click', function () {
-                if (cropper) {
-                    updateActiveAspectRatio(this);
-                    cropper.destroy();
-                    initCropper(900, 1600);
-                }
-            });
-
-            // Small fit and background color handling
-            bgColorInput.addEventListener('change', () => {
-                updateBackgroundColor(bgColorInput.value);
-            });
-
-            transparentBgButton.addEventListener('click', () => {
-                bgColorInput.value = '#ffffff'; // Reset color picker to white
-                updateBackgroundColor('transparent');
-            });
+            transparentBgButton.addEventListener('click', () => selectBackground('transparent', 'transparentBg'));
+            document.getElementById('whiteBg').addEventListener('click', () => selectBackground('#ffffff', 'whiteBg'));
+            document.getElementById('blackBg').addEventListener('click', () => selectBackground('#000000', 'blackBg'));
+            document.getElementById('customBg').addEventListener('click', () => bgColorInput.click());
+            function applyCustomBackground() {
+                document.getElementById('customBg').style.backgroundColor = bgColorInput.value;
+                document.getElementById('customBg').style.color =
+                    parseInt(bgColorInput.value.slice(1, 3), 16) * 0.299 +
+                    parseInt(bgColorInput.value.slice(3, 5), 16) * 0.587 +
+                    parseInt(bgColorInput.value.slice(5, 7), 16) * 0.114 > 150 ? '#2c3e50' : '#ffffff';
+                selectBackground(bgColorInput.value, 'customBg');
+            }
+            bgColorInput.addEventListener('input', applyCustomBackground);
+            bgColorInput.addEventListener('change', applyCustomBackground);
 
             document.getElementById('cropButton').addEventListener('click', function () {
                 if (cropper) {
