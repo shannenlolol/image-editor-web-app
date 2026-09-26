@@ -109,7 +109,14 @@ function editor() {
         document: {
             addEventListener() {},
             getElementById: element,
-            querySelector: element,
+            querySelector: (selector) => {
+                const knownSelectors = [
+                    '.cropper-view-box',
+                    '.cropper-crop-box',
+                    '.image-container',
+                ];
+                return knownSelectors.includes(selector) ? element(selector) : null;
+            },
             querySelectorAll: () => [],
             createElement: (tag) => {
                 const element = new Element();
@@ -959,4 +966,23 @@ test('a batch with interrupted background processing cannot silently export the 
     await e.download(true);
     assert.equal(e.downloads.length, 0);
     assert.match(e.element('downloadStatus').textContent, /unfinished.png/);
+});
+
+test('background swatches and live custom colours update the visible crop preview', async () => {
+    const e = editor();
+    e.select(imageFile('transparent.png'), false);
+    await e.decode();
+    const preview = e.element('.cropper-view-box');
+    e.element('blackBg').click();
+    assert.equal(preview.style.background, '#000000');
+    e.element('whiteBg').click();
+    assert.equal(preview.style.background, '#ffffff');
+    const picker = e.element('bgColor');
+    picker.value = '#8c52ff';
+    picker.dispatchEvent(new Event('input'));
+    assert.equal(preview.style.background, '#8c52ff');
+    assert.equal(e.cropper().options.fillColor, '#8c52ff');
+    e.element('transparentBg').click();
+    assert.match(preview.style.background, /repeating-conic-gradient/);
+    assert.equal(e.cropper().options.fillColor, 'transparent');
 });

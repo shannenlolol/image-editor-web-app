@@ -244,7 +244,7 @@
     function updateBackgroundColor(color) {
         if (editor.cropper) {
             editor.cropper.options.fillColor = color;
-            const viewBox = document.querySelector('.editor.cropper-view-box');
+            const viewBox = document.querySelector('.cropper-view-box');
             const preview = document.querySelector('#preview');
             const bgPattern =
                 'repeating-conic-gradient(#FFFFFF 0% 25%, #E8E8E8 0% 50%) 50% / 20px 20px';
