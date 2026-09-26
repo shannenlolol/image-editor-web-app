@@ -241,7 +241,7 @@ function editor() {
         AbortController,
         Event,
         URL: urlAPI,
-        window: { URL: urlAPI },
+        window: Object.assign(new EventTarget(), { URL: urlAPI }),
         fetch(url, options) {
             const task = deferred();
             requests.push({ ...task, url, options });
@@ -272,6 +272,13 @@ function editor() {
         await flush();
     }
     return {
+        leavingWouldPrompt: () => {
+            const event = new Event('beforeunload', { cancelable: true });
+            // BeforeUnloadEvent has a writable returnValue, unlike Node's Event.
+            Object.defineProperty(event, 'returnValue', { value: '', writable: true });
+            context.window.dispatchEvent(event);
+            return event.defaultPrevented;
+        },
         upload: (files) => context.window.ImageEditor.handleFiles(files),
         download: (all) => context.window.ImageEditor.downloadImages(all),
         element,
@@ -296,6 +303,43 @@ function editor() {
             element('batchImages').children[index].children[1].click(),
     };
 }
+
+test('leaving warns only while uploaded images remain, including during processing', async () => {
+    const e = editor();
+    assert.equal(e.leavingWouldPrompt(), false);
+    e.select({ name: 'A.png' }, false);
+    assert.equal(e.leavingWouldPrompt(), true);
+    await e.decode();
+    assert.equal(e.leavingWouldPrompt(), true);
+    e.select({ name: 'B.png' }, false);
+    await e.decode();
+    e.remove(0);
+    assert.equal(e.leavingWouldPrompt(), true);
+    e.remove(0);
+    assert.equal(e.leavingWouldPrompt(), false);
+    e.select({ name: 'C.png' }, false);
+    assert.equal(e.leavingWouldPrompt(), true);
+});
+
+test('discarding the last failed upload removes the leave warning', async () => {
+    const e = editor();
+    e.select({ name: 'broken.png' }, false);
+    assert.equal(e.leavingWouldPrompt(), true);
+    e.decodes[0].reject(new Error('EncodingError'));
+    await flush();
+    assert.equal(e.leavingWouldPrompt(), false);
+});
+
+test('downloading keeps the leave warning while images remain in the editor', async () => {
+    const e = editor();
+    e.select({ name: 'A.png' }, false);
+    await e.decode();
+    const pending = e.download();
+    e.exports[0](new Blob(['png'], { type: 'image/png' }));
+    await pending;
+    assert.equal(e.downloads.length, 1);
+    assert.equal(e.leavingWouldPrompt(), true);
+});
 
 test('upload rejection displays the server message and permits selecting another image', async () => {
     const e = editor();

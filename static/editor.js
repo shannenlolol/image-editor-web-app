@@ -368,11 +368,20 @@ window.ImageEditor = (() => {
         }
     }
 
+    function confirmLeavingEditor(event) {
+        if (!imageRecords.size) return;
+        event.preventDefault();
+        // Browsers display their own warning text; returnValue supports older ones.
+        event.returnValue = true;
+    }
+
     function updateBatchEmptyState() {
         const isEmpty =
             document.getElementById('batchImages').children.length === 0;
         document.getElementById('batchEmptyState').hidden = !isEmpty;
         document.getElementById('batchImages').hidden = isEmpty;
+        if (isEmpty) window.removeEventListener('beforeunload', confirmLeavingEditor);
+        else window.addEventListener('beforeunload', confirmLeavingEditor);
         if (controls) controls.updateDownloadState();
     }
 
