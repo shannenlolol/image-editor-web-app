@@ -107,6 +107,7 @@ function editor() {
     };
     const context = vm.createContext({
         document: {
+            documentElement: { dataset: {} },
             addEventListener() {},
             getElementById: element,
             querySelector: (selector) => {
