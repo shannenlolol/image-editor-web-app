@@ -38,7 +38,7 @@ You can use the app directly here:
 ![Rotating and flipping an image](static/assets/screenshots/rotate_flip.png)
 
 ### Multiple Images
-![Uploading and browsing multiple images](static/assets/screenshots/upload_multiple.jpeg)
+![Uploading and browsing multiple images](static/assets/screenshots/upload_multiple.png)
 
 ### Download
 ![Download menu with current image and ZIP options](static/assets/screenshots/download_menu.png)
