@@ -1,9 +1,11 @@
 from flask import Flask, request, send_file, render_template, jsonify
-from rembg import remove
+from rembg import remove, new_session
 from PIL import Image, UnidentifiedImageError
 from io import BytesIO
 import warnings
 from werkzeug.exceptions import RequestEntityTooLarge
+
+bg_session = new_session("u2netp")
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
@@ -49,7 +51,7 @@ def remove_bg():
         return jsonify({'message': 'Invalid or damaged image. Upload a supported image file.'}), 400
 
     with input_image:
-        output_image = remove(input_image)
+        output_image = remove(input_image, session=bg_session)
         img_byte_arr = BytesIO()
         output_image.save(img_byte_arr, format='PNG')
         img_byte_arr.seek(0)
