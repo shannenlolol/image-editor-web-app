@@ -14,10 +14,10 @@
   --overlay: rgba(255, 255, 255, 0.94);
   --danger-hover: #fff0ee;
   --danger-text: #c0392b;
-  --theme-track: #f0ece5;
-  --theme-border: #d5cbbd;
+  --theme-track: #eaf2fb;
+  --theme-border: #b9d3ee;
   --theme-active: #ffffff;
-  --theme-icon: #65543c;
+  --theme-icon: #2063a5;
   --checker-light: #ffffff;
   --checker-dark: #e8e8e8;
 }
@@ -36,10 +36,10 @@
   --overlay: rgba(35, 38, 45, 0.94);
   --danger-hover: #492d30;
   --danger-text: #ffaaa0;
-  --theme-track: #25221e;
-  --theme-border: #514636;
-  --theme-active: #594731;
-  --theme-icon: #ffe4af;
+  --theme-track: #1e2733;
+  --theme-border: #3a5273;
+  --theme-active: #233f60;
+  --theme-icon: #abd3ff;
   --checker-light: #343943;
   --checker-dark: #292e36;
 }
