@@ -3,3 +3,5 @@ venv/
 virtualenv/
 .venv/
 *.py[cod]
+AGENTS.md
+TODO.md
