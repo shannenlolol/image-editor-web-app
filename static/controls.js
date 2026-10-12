@@ -214,34 +214,37 @@
         editor.cropper.rotateTo(editor.rotationAngle);
         syncRotationControls();
     }
-    document
-        .getElementById('rotateLeft')
-        .addEventListener('click', () =>
-            setRotation(editor.rotationAngle - 90),
-        );
-    document
-        .getElementById('rotateRight')
-        .addEventListener('click', () =>
-            setRotation(editor.rotationAngle + 90),
-        );
+    document.getElementById('rotateLeft').addEventListener('click', () => {
+        setRotation(editor.rotationAngle - 90);
+        editor.commitEdit();
+    });
+    document.getElementById('rotateRight').addEventListener('click', () => {
+        setRotation(editor.rotationAngle + 90);
+        editor.commitEdit();
+    });
     for (const id of ['rotationAngle', 'rotationSlider']) {
-        document.getElementById(id).addEventListener('input', (event) => {
+        const input = document.getElementById(id);
+        input.addEventListener('input', (event) => {
             const value = Number(event.target.value);
             if (event.target.value.trim() && value >= -180 && value <= 180)
                 setRotation(value);
         });
+        // Record one undo step when dragging or typing ends, not per input event.
+        input.addEventListener('change', editor.commitEdit);
     }
     document.getElementById('flipHorizontal').addEventListener('click', () => {
         if (!editor.cropper || !editor.cropper.ready) return;
         editor.horizontalScale *= -1;
         editor.cropper.scaleX(editor.horizontalScale);
         syncRotationControls();
+        editor.commitEdit();
     });
     document.getElementById('flipVertical').addEventListener('click', () => {
         if (!editor.cropper || !editor.cropper.ready) return;
         editor.verticalScale *= -1;
         editor.cropper.scaleY(editor.verticalScale);
         syncRotationControls();
+        editor.commitEdit();
     });
 
     function updateBackgroundColor(color) {
@@ -281,6 +284,7 @@
     // Handle background removal toggle
     removeBgCheckbox.addEventListener('change', function () {
         if (editor.selectedFile) {
+            editor.clearHistory();
             editor.processSelectedImage(editor.selectedFile, this.checked, false);
         }
     });
@@ -310,12 +314,15 @@
 
     widthInput.addEventListener('input', applyResolution);
     heightInput.addEventListener('input', applyResolution);
+    widthInput.addEventListener('change', editor.commitEdit);
+    heightInput.addEventListener('change', editor.commitEdit);
 
     // Reset functionality - resets image to original state
     document
         .getElementById('resetButton')
         .addEventListener('click', function () {
             if (editor.selectedFile && editor.cropper) {
+                editor.clearHistory();
                 editor.processSelectedImage(
                     editor.selectedFile,
                     removeBgCheckbox.checked,
@@ -350,6 +357,7 @@
                     Math.max(1, Math.round(width / ratio)),
                 );
             }
+            editor.commitEdit();
         });
 
     function selectBackground(color, activeButton) {
@@ -362,19 +370,18 @@
         updateBackgroundColor(color);
     }
 
-    transparentBgButton.addEventListener('click', () =>
-        selectBackground('transparent', 'transparentBg'),
-    );
-    document
-        .getElementById('whiteBg')
-        .addEventListener('click', () =>
-            selectBackground('#ffffff', 'whiteBg'),
-        );
-    document
-        .getElementById('blackBg')
-        .addEventListener('click', () =>
-            selectBackground('#000000', 'blackBg'),
-        );
+    transparentBgButton.addEventListener('click', () => {
+        selectBackground('transparent', 'transparentBg');
+        editor.commitEdit();
+    });
+    document.getElementById('whiteBg').addEventListener('click', () => {
+        selectBackground('#ffffff', 'whiteBg');
+        editor.commitEdit();
+    });
+    document.getElementById('blackBg').addEventListener('click', () => {
+        selectBackground('#000000', 'blackBg');
+        editor.commitEdit();
+    });
     document
         .getElementById('customBg')
         .addEventListener('click', () => bgColorInput.click());
@@ -391,7 +398,11 @@
         selectBackground(bgColorInput.value, 'customBg');
     }
     bgColorInput.addEventListener('input', applyCustomBackground);
-    bgColorInput.addEventListener('change', applyCustomBackground);
+    // The picker fires input while browsing colours; record one step when it closes.
+    bgColorInput.addEventListener('change', () => {
+        applyCustomBackground();
+        editor.commitEdit();
+    });
 
     function syncBackgroundControls() {
         const color = editor.selectedBackground;
@@ -431,6 +442,9 @@
         document.getElementById('downloadAll').disabled = !editor.canDownload;
         downloadTrigger.setAttribute('aria-busy', String(editor.exportBusy));
         if (!editor.canDownload) closeDownloadMenu();
+        // Undo availability changes at the same points as download availability.
+        document.getElementById('undoButton').disabled = !editor.canUndo;
+        document.getElementById('redoButton').disabled = !editor.canRedo;
     }
 
     function setDownloadStatus(message) {
@@ -473,6 +487,21 @@
     });
     document.addEventListener('click', (event) => {
         if (!downloadControl.contains(event.target)) closeDownloadMenu();
+    });
+
+    document.getElementById('undoButton').addEventListener('click', editor.undo);
+    document.getElementById('redoButton').addEventListener('click', editor.redo);
+    document.addEventListener('keydown', (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        const key = event.key.toLowerCase();
+        const redo = (key === 'z' && event.shiftKey) || (key === 'y' && !event.shiftKey);
+        if (key !== 'z' && !redo) return;
+        // Number fields keep the browser's own undo for what is being typed.
+        if (event.target.matches?.('input[type="number"], input[type="text"], textarea'))
+            return;
+        event.preventDefault();
+        if (redo) editor.redo();
+        else editor.undo();
     });
 
     editor.attachControls({

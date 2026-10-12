@@ -17,6 +17,7 @@ window.ImageEditor = (() => {
     let horizontalScale = 1;
     let verticalScale = 1;
     const MAX_UPLOAD_SIDE = 2048;
+    const HISTORY_LIMIT = 50;
     const previewImage = document.getElementById('image');
     const fileInput = document.getElementById('imageInput');
     const removeBgCheckbox = document.getElementById('removeBg');
@@ -35,6 +36,17 @@ window.ImageEditor = (() => {
         loadingOverlay.style.display = 'none';
     }
 
+    function currentAspectRatio() {
+        const preset = document.getElementById('aspectRatioPreset');
+        return preset.value === 'free'
+            ? NaN
+            : preset.value === 'original'
+              ? sourceDimensions.width / sourceDimensions.height
+              : preset.value === 'custom'
+                ? Number(widthInput.value) / Number(heightInput.value)
+                : Number(preset.value);
+    }
+
     function initCropper(record) {
         const requestId = imageRequestId;
         if (cropper) {
@@ -43,18 +55,9 @@ window.ImageEditor = (() => {
 
         previewImage.style.display = 'block';
         uploadPlaceholder.style.display = 'none';
-        const preset = document.getElementById('aspectRatioPreset');
-        const ratio =
-            preset.value === 'free'
-                ? NaN
-                : preset.value === 'original'
-                  ? sourceDimensions.width / sourceDimensions.height
-                  : preset.value === 'custom'
-                    ? Number(widthInput.value) / Number(heightInput.value)
-                    : Number(preset.value);
 
         const options = {
-            aspectRatio: ratio,
+            aspectRatio: currentAspectRatio(),
             viewMode: 0,
             autoCropArea: 1,
             background: true,
@@ -81,6 +84,10 @@ window.ImageEditor = (() => {
             wheelZoomRatio: 0.1,
             minZoom: 0.01, // Allow zooming out to 1% of original size
             maxZoom: 100, // Allow zooming in to 10000% of original size
+            // Fires once a crop-box drag or resize finishes, not on every frame.
+            cropend: function () {
+                if (requestId === imageRequestId) commitEdit();
+            },
             ready: function () {
                 if (requestId !== imageRequestId || !cropper) return;
                 controls.applyImageTransform();
@@ -125,6 +132,10 @@ window.ImageEditor = (() => {
                     scaleX: horizontalScale,
                     scaleY: verticalScale,
                 });
+                // Re-baseline on every load: revisiting an image keeps its history,
+                // but the restored crop may differ by rounding from the saved one.
+                record.history = record.history || { past: [], future: [] };
+                record.history.current = takeSnapshot();
                 controls.updateDownloadState();
             },
         };
@@ -379,6 +390,58 @@ window.ImageEditor = (() => {
         controls.syncPresetMenu();
         controls.syncRotationControls();
         controls.syncBackgroundControls();
+    }
+
+    // Each image keeps its own history of whole-editor snapshots. Undo restores
+    // a snapshot onto the live cropper, so no image is reprocessed.
+    function takeSnapshot() {
+        return { settings: captureImageSettings(), cropData: { ...cropper.getData() } };
+    }
+
+    function historyReady() {
+        const record = imageRecords.get(selectedFile);
+        return record && record.history && cropper && cropper.ready && !imageAbortController
+            ? record.history
+            : null;
+    }
+
+    function commitEdit() {
+        const history = historyReady();
+        if (!history) return;
+        const snapshot = takeSnapshot();
+        if (JSON.stringify(snapshot) === JSON.stringify(history.current)) return;
+        history.past.push(history.current);
+        if (history.past.length > HISTORY_LIMIT) history.past.shift();
+        history.current = snapshot;
+        history.future = [];
+        controls.updateDownloadState();
+    }
+
+    function applySnapshot({ settings, cropData }) {
+        restoreImageSettings(settings);
+        cropper.setAspectRatio(currentAspectRatio());
+        controls.applyImageTransform();
+        cropper.setData(cropData);
+        controls.updateBackgroundColor(selectedBackground);
+    }
+
+    function stepHistory(from, to) {
+        // Record an edit still in progress (such as a typed width) so it can be redone.
+        commitEdit();
+        const history = historyReady();
+        if (!history || !history[from].length) return;
+        history[to].push(history.current);
+        history.current = history[from].pop();
+        applySnapshot(history.current);
+        controls.updateDownloadState();
+    }
+
+    // Background removal and Reset replace the image itself, so earlier
+    // snapshots no longer apply to it.
+    function clearHistory() {
+        const record = imageRecords.get(selectedFile);
+        if (record) record.history = null;
+        controls.updateDownloadState();
     }
 
     // Capture pixels before destroying the cropper. An inactive image's canvas is immutable,
@@ -687,6 +750,16 @@ window.ImageEditor = (() => {
         handleFiles,
         processSelectedImage,
         downloadImages,
+        commitEdit,
+        clearHistory,
+        undo: () => stepHistory('past', 'future'),
+        redo: () => stepHistory('future', 'past'),
+        get canUndo() {
+            return Boolean(historyReady()?.past.length);
+        },
+        get canRedo() {
+            return Boolean(historyReady()?.future.length);
+        },
         get canDownload() {
             return Boolean(
                 cropper &&

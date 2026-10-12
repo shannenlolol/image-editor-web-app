@@ -108,10 +108,11 @@ function editor() {
             revoked.add(url);
         },
     };
+    const documentEvents = new EventTarget();
     const context = vm.createContext({
         document: {
             documentElement: { dataset: {} },
-            addEventListener() {},
+            addEventListener: (...args) => documentEvents.addEventListener(...args),
             getElementById: element,
             querySelector: (selector) => {
                 const knownSelectors = [
@@ -314,6 +315,17 @@ function editor() {
         canvases,
         downloads,
         resizeCanvas: () => resizeCanvas(),
+        // Node's EventTarget does not bubble, so present the key as coming from target.
+        keydown(key, modifiers = {}, target = context.document.body) {
+            const event = Object.assign(
+                new Event('keydown', { cancelable: true }),
+                { key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false },
+                modifiers,
+            );
+            Object.defineProperty(event, 'target', { value: target });
+            documentEvents.dispatchEvent(event);
+            return event.defaultPrevented;
+        },
         visibleImage: () => urls.get(element('image').src),
         filename: () => context.window.ImageEditor.selectedFileName,
         cropper: () => context.window.ImageEditor.cropper,
@@ -1394,4 +1406,171 @@ test('switching images while a photo is downscaling skips its upload', async () 
     await flush();
     assert.equal(e.requests.length, 0);
     assert.equal(e.filename(), 'next.png');
+});
+
+async function editedImage(name = 'A.png') {
+    const e = editor();
+    await e.select({ name }, false);
+    await e.decode();
+    return e;
+}
+
+function dragCrop(e, data) {
+    e.cropper().data = { ...e.cropper().data, ...data };
+    e.cropper().options.cropend();
+}
+
+test('undo and redo step through crop, transform and background edits', async () => {
+    const e = await editedImage();
+    const undo = e.element('undoButton'),
+        redo = e.element('redoButton');
+    assert.equal(undo.disabled, true);
+    assert.equal(redo.disabled, true);
+    const initial = e.cropper().getData();
+    dragCrop(e, { x: 40, width: 200 });
+    e.element('rotateRight').click();
+    e.element('flipHorizontal').click();
+    e.element('blackBg').click();
+    assert.equal(undo.disabled, false);
+
+    undo.click();
+    assert.equal(e.element('blackBg')['aria-pressed'], 'false');
+    assert.equal(e.element('transparentBg')['aria-pressed'], 'true');
+    assert.equal(e.cropper().horizontalScale, -1);
+    undo.click();
+    assert.equal(e.cropper().horizontalScale, 1);
+    assert.equal(e.element('flipHorizontal')['aria-pressed'], 'false');
+    undo.click();
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.element('rotationAngle').value, '0');
+    undo.click();
+    assert.deepEqual(e.cropper().getData(), initial);
+    assert.equal(undo.disabled, true);
+    assert.equal(redo.disabled, false);
+
+    redo.click();
+    assert.equal(e.cropper().getData().x, 40);
+    assert.equal(e.cropper().getData().width, 200);
+    redo.click();
+    redo.click();
+    redo.click();
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.cropper().horizontalScale, -1);
+    assert.equal(e.element('blackBg')['aria-pressed'], 'true');
+    assert.equal(redo.disabled, true);
+    // Undo works on the live cropper; nothing is reprocessed or rebuilt.
+    assert.equal(e.croppers.length, 1);
+    assert.equal(e.decodes.length, 1);
+});
+
+test('undo restores output size and aspect ratio together', async () => {
+    const e = await editedImage();
+    e.element('widthInput').value = '300';
+    e.element('widthInput').dispatchEvent(new Event('input'));
+    // No change event yet: undo must still record the typed width first.
+    e.element('undoButton').click();
+    assert.equal(e.element('widthInput').value, '640');
+    assert.equal(e.element('aspectRatioPreset').value, 'original');
+    assert.equal(e.cropper().options.aspectRatio, 640 / 480);
+    e.element('redoButton').click();
+    assert.equal(e.element('widthInput').value, '300');
+    assert.equal(e.element('aspectRatioPreset').value, 'custom');
+    assert.equal(e.cropper().options.aspectRatio, 300 / 480);
+});
+
+test('continuous controls record one step when they settle', async () => {
+    const e = await editedImage();
+    const slider = e.element('rotationSlider');
+    for (const value of ['10', '20', '30']) {
+        slider.value = value;
+        slider.dispatchEvent(new Event('input'));
+    }
+    slider.dispatchEvent(new Event('change'));
+    const colour = e.element('bgColor');
+    for (const value of ['#111111', '#222222']) {
+        colour.value = value;
+        colour.dispatchEvent(new Event('input'));
+    }
+    colour.dispatchEvent(new Event('change'));
+    e.element('undoButton').click();
+    assert.equal(e.element('transparentBg')['aria-pressed'], 'true');
+    assert.equal(e.cropper().rotation, 30);
+    e.element('undoButton').click();
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.element('undoButton').disabled, true);
+});
+
+test('a new edit after undo discards the redo steps, and no-op edits add none', async () => {
+    const e = await editedImage();
+    e.element('flipVertical').click();
+    e.element('undoButton').click();
+    assert.equal(e.element('redoButton').disabled, false);
+    e.element('transparentBg').click();
+    assert.equal(e.element('redoButton').disabled, false);
+    e.element('rotateLeft').click();
+    assert.equal(e.element('redoButton').disabled, true);
+    e.element('undoButton').click();
+    assert.equal(e.element('undoButton').disabled, true);
+});
+
+test('history is kept per image across switching', async () => {
+    const e = editor();
+    const a = { name: 'A.png' };
+    await e.select(a, false);
+    await e.decode();
+    e.element('rotateRight').click();
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.element('undoButton').disabled, true);
+    e.element('batchImages').children[0].click();
+    assert.equal(e.element('undoButton').disabled, true);
+    await e.decode();
+    assert.equal(e.element('undoButton').disabled, false);
+    e.element('undoButton').click();
+    assert.equal(e.cropper().rotation, 0);
+});
+
+test('background removal and reset start a fresh history', async () => {
+    for (const action of ['toggle', 'reset']) {
+        const e = await editedImage();
+        e.element('rotateRight').click();
+        if (action === 'toggle') await e.toggle(true);
+        else e.element('resetButton').click();
+        await flush();
+        assert.equal(e.element('undoButton').disabled, true, action);
+        if (action === 'toggle') await e.respond(e.requests[0], { name: 'cutout' });
+        await e.decode();
+        assert.equal(e.element('undoButton').disabled, true, action);
+        e.element('flipVertical').click();
+        e.element('undoButton').click();
+        assert.equal(e.element('undoButton').disabled, true, action);
+    }
+});
+
+test('keyboard shortcuts undo and redo outside text fields', async () => {
+    const e = await editedImage();
+    e.element('rotateRight').click();
+    assert.equal(e.keydown('z', { metaKey: true }), true);
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.keydown('z', { ctrlKey: true, shiftKey: true }), true);
+    assert.equal(e.cropper().rotation, 90);
+    e.keydown('z', { ctrlKey: true });
+    assert.equal(e.keydown('y', { ctrlKey: true }), true);
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.keydown('z'), false);
+    assert.equal(e.keydown('z', { ctrlKey: true, altKey: true }), false);
+    const numberField = { matches: (selector) => selector.includes('input[type="number"]') };
+    assert.equal(e.keydown('z', { ctrlKey: true }, numberField), false);
+    assert.equal(e.cropper().rotation, 90);
+});
+
+test('history keeps the most recent 50 steps', async () => {
+    const e = await editedImage();
+    for (let step = 0; step < 60; step++) e.element('flipVertical').click();
+    let undone = 0;
+    while (!e.element('undoButton').disabled) {
+        e.element('undoButton').click();
+        undone++;
+    }
+    assert.equal(undone, 50);
 });
