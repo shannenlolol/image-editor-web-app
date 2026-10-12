@@ -563,14 +563,35 @@ window.ImageEditor = (() => {
         return canvas;
     }
 
-    function canvasToBlob(canvas) {
+    const EXPORT_EXTENSIONS = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/webp': 'webp',
+    };
+    const PNG_EXPORT = { type: 'image/png' };
+
+    function canvasToBlob(canvas, format = PNG_EXPORT) {
+        let source = canvas;
+        if (format.type === 'image/jpeg') {
+            // JPEG has no alpha channel; without a backdrop, browsers turn
+            // transparent pixels black.
+            source = document.createElement('canvas');
+            source.width = canvas.width;
+            source.height = canvas.height;
+            const context = source.getContext('2d');
+            if (!context) throw new Error('Could not create the download canvas.');
+            context.fillStyle = '#ffffff';
+            context.fillRect(0, 0, source.width, source.height);
+            context.drawImage(canvas, 0, 0);
+        }
         return new Promise((resolve, reject) => {
-            canvas.toBlob(
+            source.toBlob(
                 (blob) =>
                     blob
                         ? resolve(blob)
                         : reject(new Error('Could not encode the image.')),
-                'image/png',
+                format.type,
+                format.quality,
             );
         });
     }
@@ -604,7 +625,7 @@ window.ImageEditor = (() => {
         return filename;
     }
 
-    function exportSnapshot(record, usedNames) {
+    function exportSnapshot(record, usedNames, extension) {
         if (record.status === 'unvisited') {
             return {
                 filename: uniqueFilename(record.file.name, usedNames),
@@ -620,16 +641,17 @@ window.ImageEditor = (() => {
                 `Cannot export ${record.file.name}. Select it and finish processing with valid dimensions, then retry.`,
             );
         }
-        const name = `edited_${record.file.name.replace(/\.[^/.]+$/, '')}.png`;
+        const name = `edited_${record.file.name.replace(/\.[^/.]+$/, '')}.${extension}`;
         return {
             filename: uniqueFilename(name, usedNames),
             canvas: record.savedCanvas,
         };
     }
 
-    async function downloadImages(allImages = false) {
+    async function downloadImages(allImages = false, format = PNG_EXPORT) {
         if (exportBusy || !cropper || !cropper.ready || imageAbortController)
             return;
+        if (!EXPORT_EXTENSIONS[format.type]) format = PNG_EXPORT;
         exportBusy = true;
         controls.updateDownloadState();
         try {
@@ -641,7 +663,7 @@ window.ImageEditor = (() => {
                 ? [...imageRecords.values()]
                 : [imageRecords.get(selectedFile)];
             const snapshots = records.map((record) =>
-                exportSnapshot(record, usedNames),
+                exportSnapshot(record, usedNames, EXPORT_EXTENSIONS[format.type]),
             );
             if (allImages) {
                 const zip = new window.JSZip();
@@ -651,7 +673,7 @@ window.ImageEditor = (() => {
                     );
                     const entry = snapshots[index];
                     const blob =
-                        entry.blob || (await canvasToBlob(entry.canvas));
+                        entry.blob || (await canvasToBlob(entry.canvas, format));
                     zip.file(entry.filename, await blob.arrayBuffer());
                 }
                 const archive = await zip.generateAsync(
@@ -666,7 +688,7 @@ window.ImageEditor = (() => {
             } else {
                 controls.setDownloadStatus('Preparing image…');
                 const entry = snapshots[0];
-                downloadBlob(await canvasToBlob(entry.canvas), entry.filename);
+                downloadBlob(await canvasToBlob(entry.canvas, format), entry.filename);
             }
             controls.setDownloadStatus('Download ready.');
         } catch (error) {

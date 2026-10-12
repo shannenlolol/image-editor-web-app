@@ -30,7 +30,7 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
-function editor() {
+function editor({ webpEncoding = true } = {}) {
     class Element extends EventTarget {
         constructor() {
             super();
@@ -138,6 +138,11 @@ function editor() {
                             element.renderedFrom = source;
                         },
                     });
+                    // Browsers without an encoder return a PNG data URL instead.
+                    element.toDataURL = (type) =>
+                        type === 'image/webp' && webpEncoding
+                            ? 'data:image/webp;base64,'
+                            : 'data:image/png;base64,';
                     element.toBlob = (callback, type, quality) =>
                         exports.push(
                             Object.assign(callback, { canvas: element, type, quality }),
@@ -299,7 +304,8 @@ function editor() {
             return event.defaultPrevented;
         },
         upload: (files) => context.window.ImageEditor.handleFiles(files),
-        download: (all) => context.window.ImageEditor.downloadImages(all),
+        download: (all, format) =>
+            context.window.ImageEditor.downloadImages(all, format),
         element,
         select,
         toggle,
@@ -1394,4 +1400,116 @@ test('switching images while a photo is downscaling skips its upload', async () 
     await flush();
     assert.equal(e.requests.length, 0);
     assert.equal(e.filename(), 'next.png');
+});
+
+function chooseExport(e, format, quality) {
+    e.element('exportFormat').value = format;
+    e.element('exportFormat').dispatchEvent(new Event('change'));
+    if (quality !== undefined) {
+        e.element('exportQuality').value = String(quality);
+        e.element('exportQuality').dispatchEvent(new Event('input'));
+    }
+}
+
+test('JPEG export uses the chosen quality and a white backdrop for transparency', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    chooseExport(e, 'image/jpeg', 70);
+    assert.equal(e.element('exportQualityRow').hidden, false);
+    assert.equal(e.element('exportNote').hidden, false);
+    assert.equal(e.element('exportQualityValue').textContent, '70%');
+    e.element('downloadMenuButton').click();
+    e.element('downloadCurrent').click();
+    const toBlob = e.exports.at(-1);
+    assert.equal(toBlob.type, 'image/jpeg');
+    assert.equal(toBlob.quality, 0.7);
+    // The edited canvas is drawn onto a fresh, white-filled canvas before encoding.
+    const edited = toBlob.canvas.renderedFrom;
+    assert.equal(e.canvases.includes(edited), true);
+    assert.equal(toBlob.canvas.width, edited.width);
+    assert.equal(toBlob.canvas.height, edited.height);
+    toBlob(new Blob(['jpeg'], { type: 'image/jpeg' }));
+    await flush();
+    assert.equal(e.downloads[0].filename, 'edited_A.jpg');
+});
+
+test('WebP export keeps transparency and PNG ignores the quality setting', async () => {
+    for (const [format, filename, quality] of [
+        ['image/webp', 'edited_A.webp', 0.55],
+        ['image/png', 'edited_A.png', undefined],
+    ]) {
+        const e = editor();
+        await e.select({ name: 'A.png' }, false);
+        await e.decode();
+        chooseExport(e, format, 55);
+        assert.equal(e.element('exportQualityRow').hidden, format === 'image/png');
+        assert.equal(e.element('exportNote').hidden, true);
+        e.element('downloadMenuButton').click();
+        e.element('downloadCurrent').click();
+        const toBlob = e.exports.at(-1);
+        assert.equal(toBlob.type, format);
+        assert.equal(toBlob.quality, quality);
+        // The edited canvas is encoded directly, not copied onto a backdrop.
+        assert.equal(e.canvases.includes(toBlob.canvas.renderedFrom), false);
+        toBlob(new Blob(['image'], { type: format }));
+        await flush();
+        assert.equal(e.downloads[0].filename, filename);
+    }
+});
+
+test('ZIP export applies the format to edited images and keeps untouched originals', async () => {
+    const e = editor();
+    e.element('removeBg').checked = false;
+    e.upload([imageFile('edited.png'), imageFile('original.png', 'untouched image')]);
+    await e.decode();
+    const pending = e.download(true, { type: 'image/webp', quality: 0.8 });
+    assert.equal(e.exports[0].type, 'image/webp');
+    assert.equal(e.exports[0].quality, 0.8);
+    await encodeExport(e, 0);
+    await pending;
+    const zip = await JSZip.loadAsync(await e.downloads[0].blob.arrayBuffer());
+    assert.deepEqual(Object.keys(zip.files), ['edited_edited.webp', 'original.png']);
+});
+
+test('unknown export formats fall back to PNG', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.download(false, { type: 'image/gif' });
+    await flush();
+    assert.equal(e.exports.at(-1).type, 'image/png');
+    e.exports.at(-1)(new Blob(['png'], { type: 'image/png' }));
+    await flush();
+    assert.equal(e.downloads[0].filename, 'edited_A.png');
+});
+
+test('WebP is disabled when the browser cannot encode it', async () => {
+    for (const webpEncoding of [true, false]) {
+        const e = editor({ webpEncoding });
+        await e.select({ name: 'A.png' }, false);
+        await e.decode();
+        e.element('downloadMenuButton').click();
+        const option = e.element('exportFormatWebp');
+        assert.equal(Boolean(option.disabled), !webpEncoding);
+    }
+});
+
+test('arrow keys move between download actions but not inside the export options', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.element('downloadMenuButton').click();
+    const press = (target) => {
+        const event = new Event('keydown', { cancelable: true });
+        event.key = 'ArrowDown';
+        // Node's EventTarget does not bubble, so present the key as coming from target.
+        Object.defineProperty(event, 'target', { value: target });
+        e.element('downloadMenu').dispatchEvent(event);
+        return event.defaultPrevented;
+    };
+    assert.equal(press(e.element('exportQuality')), false);
+    assert.equal(press(e.element('exportFormat')), false);
+    assert.equal(press(e.element('downloadCurrent')), true);
+    assert.equal(e.element('downloadAll').focused, true);
 });
