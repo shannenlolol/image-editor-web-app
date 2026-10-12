@@ -12,10 +12,13 @@ const html = fs.readFileSync(
 );
 const scripts = [
     ...html.matchAll(/<script src="(\/static\/[^" ]+\.js)"><\/script>/g),
-].map(([, src]) => ({
-    filename: src,
-    source: fs.readFileSync(path.join(__dirname, '..', src), 'utf8'),
-}));
+]
+    // The real Cropper needs a DOM and would replace the fake Cropper below.
+    .filter(([, src]) => src !== '/static/vendor/cropper.min.js')
+    .map(([, src]) => ({
+        filename: src,
+        source: fs.readFileSync(path.join(__dirname, '..', src), 'utf8'),
+    }));
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function deferred() {
@@ -135,9 +138,9 @@ function editor() {
                             element.renderedFrom = source;
                         },
                     });
-                    element.toBlob = (callback) =>
+                    element.toBlob = (callback, type, quality) =>
                         exports.push(
-                            Object.assign(callback, { canvas: element }),
+                            Object.assign(callback, { canvas: element, type, quality }),
                         );
                 }
                 return element;
@@ -153,6 +156,17 @@ function editor() {
                 decodes.push({ ...task, url: this.src });
                 return task.promise;
             }
+        },
+        // Upload shrinking decodes here; Image.decode is reserved for the editor preview.
+        createImageBitmap: async (file) => {
+            if (file.undecodable) throw new Error('InvalidStateError');
+            return {
+                width: file.width || 640,
+                height: file.height || 480,
+                close() {
+                    this.closed = true;
+                },
+            };
         },
         ResizeObserver: class {
             constructor(callback) {
@@ -256,14 +270,17 @@ function editor() {
     });
     for (const script of scripts)
         vm.runInContext(script.source, context, { filename: script.filename });
-    function select(file, removeBackground = true) {
+    // Waits for the upload shrinking step, so a removal request is sent on return.
+    async function select(file, removeBackground = true) {
         element('removeBg').checked = removeBackground;
         context.selectedFile = file;
         context.window.ImageEditor.handleFiles([file]);
+        await flush();
     }
-    function toggle(checked) {
+    async function toggle(checked) {
         element('removeBg').checked = checked;
         element('removeBg').dispatchEvent(new Event('change'));
+        await flush();
     }
     async function respond(request, blob) {
         request.resolve({ ok: true, blob: () => Promise.resolve(blob) });
@@ -309,23 +326,23 @@ function editor() {
 test('leaving warns only while uploaded images remain, including during processing', async () => {
     const e = editor();
     assert.equal(e.leavingWouldPrompt(), false);
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     assert.equal(e.leavingWouldPrompt(), true);
     await e.decode();
     assert.equal(e.leavingWouldPrompt(), true);
-    e.select({ name: 'B.png' }, false);
+    await e.select({ name: 'B.png' }, false);
     await e.decode();
     e.remove(0);
     assert.equal(e.leavingWouldPrompt(), true);
     e.remove(0);
     assert.equal(e.leavingWouldPrompt(), false);
-    e.select({ name: 'C.png' }, false);
+    await e.select({ name: 'C.png' }, false);
     assert.equal(e.leavingWouldPrompt(), true);
 });
 
 test('discarding the last failed upload removes the leave warning', async () => {
     const e = editor();
-    e.select({ name: 'broken.png' }, false);
+    await e.select({ name: 'broken.png' }, false);
     assert.equal(e.leavingWouldPrompt(), true);
     e.decodes[0].reject(new Error('EncodingError'));
     await flush();
@@ -334,7 +351,7 @@ test('discarding the last failed upload removes the leave warning', async () => 
 
 test('downloading keeps the leave warning while images remain in the editor', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const pending = e.download();
     e.exports[0](new Blob(['png'], { type: 'image/png' }));
@@ -345,7 +362,7 @@ test('downloading keeps the leave warning while images remain in the editor', as
 
 test('upload rejection displays the server message and permits selecting another image', async () => {
     const e = editor();
-    e.select({ name: 'large.png' });
+    await e.select({ name: 'large.png' });
     e.requests[0].resolve({
         ok: false,
         status: 413,
@@ -355,7 +372,7 @@ test('upload rejection displays the server message and permits selecting another
     assert.match(e.alerts[0], /25 megapixels/);
     assert.equal(e.loading(), false);
     assert.equal(e.decodes.length, 0);
-    e.select({ name: 'valid.png' }, false);
+    await e.select({ name: 'valid.png' }, false);
     await e.decode();
     assert.equal(e.filename(), 'valid.png');
     assert.equal(e.loading(), false);
@@ -363,7 +380,7 @@ test('upload rejection displays the server message and permits selecting another
 
 test('non-JSON upload rejection has a useful fallback', async () => {
     const e = editor();
-    e.select({ name: 'large.png' });
+    await e.select({ name: 'large.png' });
     e.requests[0].resolve({
         ok: false,
         status: 413,
@@ -377,10 +394,10 @@ test('non-JSON upload rejection has a useful fallback', async () => {
 test('a delayed validation error cannot interrupt a newer selection', async () => {
     const e = editor();
     const body = deferred();
-    e.select({ name: 'large.png' });
+    await e.select({ name: 'large.png' });
     e.requests[0].resolve({ ok: false, status: 413, json: () => body.promise });
     await flush();
-    e.select({ name: 'next.png' }, false);
+    await e.select({ name: 'next.png' }, false);
     body.resolve({ message: 'Image is too large.' });
     await flush();
     assert.deepEqual(e.alerts, []);
@@ -391,7 +408,7 @@ test('a delayed validation error cannot interrupt a newer selection', async () =
 
 test('network failure clears the failed upload and allows uploading it again', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     e.requests[0].reject(new TypeError('Failed to fetch'));
     await flush();
     assert.match(e.alerts[0], /connection.*upload the image again/);
@@ -400,7 +417,7 @@ test('network failure clears the failed upload and allows uploading it again', a
     assert.equal(e.element('downloadMenuButton').disabled, true);
 
     assert.equal(e.element('batchImages').children.length, 0);
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     assert.equal(e.loading(), true);
     assert.equal(e.requests.length, 2);
     await e.respond(e.requests[1], { name: 'recovered' });
@@ -413,7 +430,7 @@ test('network failure clears the failed upload and allows uploading it again', a
 
 test('HTTP server errors never reach decoding and allow retry', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     e.requests[0].resolve({
         ok: false,
         status: 500,
@@ -425,7 +442,7 @@ test('HTTP server errors never reach decoding and allow retry', async () => {
     assert.equal(e.loading(), false);
     assert.equal(e.decodes.length, 0);
     assert.equal(e.element('batchImages').children.length, 0);
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     await e.respond(e.requests[1], { name: 'recovered' });
     await e.decode();
     assert.equal(e.element('downloadMenuButton').disabled, false);
@@ -433,7 +450,7 @@ test('HTTP server errors never reach decoding and allow retry', async () => {
 
 test('a failed response body read clears loading and allows selecting another image', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     e.requests[0].resolve({
         ok: true,
         blob: async () => { throw new TypeError('Connection lost'); },
@@ -442,7 +459,7 @@ test('a failed response body read clears loading and allows selecting another im
     assert.match(e.alerts[0], /read the processed image.*retry/);
     assert.equal(e.loading(), false);
     assert.equal(e.decodes.length, 0);
-    e.select({ name: 'B.png' }, false);
+    await e.select({ name: 'B.png' }, false);
     await e.decode();
     assert.equal(e.filename(), 'B.png');
     assert.equal(e.element('downloadMenuButton').disabled, false);
@@ -450,7 +467,7 @@ test('a failed response body read clears loading and allows selecting another im
 
 test('invalid local images release their URL and allow selecting a valid image', async () => {
     const e = editor();
-    e.select({ name: 'corrupt.png' }, false);
+    await e.select({ name: 'corrupt.png' }, false);
     const decode = e.decodes[0];
     decode.reject(new Error('EncodingError'));
     await flush();
@@ -459,7 +476,7 @@ test('invalid local images release their URL and allow selecting a valid image',
     assert.equal(e.loading(), false);
     assert.equal(e.cropper(), null);
     assert.equal(e.element('downloadMenuButton').disabled, true);
-    e.select({ name: 'valid.png' }, false);
+    await e.select({ name: 'valid.png' }, false);
     await e.decode();
     assert.equal(e.visibleImage().name, 'valid.png');
     assert.equal(e.element('downloadMenuButton').disabled, false);
@@ -469,7 +486,7 @@ test('invalid local images release their URL and allow selecting a valid image',
 test('a failed lone upload restores the empty editor and releases both image URLs', async () => {
     const e = editor();
     e.element('imageInput').value = 'broken.HEIC';
-    e.select({ name: 'broken.HEIC' }, false);
+    await e.select({ name: 'broken.HEIC' }, false);
     const thumbnailUrl = e.element('batchImages').firstElementChild.firstElementChild.firstElementChild.src;
     const decode = e.decodes[0];
     e.element('widthInput').value = '123';
@@ -494,13 +511,13 @@ test('a failed lone upload restores the empty editor and releases both image URL
 
 test('discarding a failed upload preserves another image and its saved edits', async () => {
     const e = editor();
-    e.select({ name: 'valid.png' }, false);
+    await e.select({ name: 'valid.png' }, false);
     await e.decode();
     e.element('widthInput').value = '300';
     e.element('heightInput').value = '200';
     e.element('widthInput').dispatchEvent(new Event('input'));
     e.element('rotateRight').click();
-    e.select({ name: 'broken.HEIC' }, false);
+    await e.select({ name: 'broken.HEIC' }, false);
     e.decodes.at(-1).reject(new Error('EncodingError'));
     await flush();
     assert.equal(e.element('batchImages').children.length, 1);
@@ -532,7 +549,7 @@ test('a batch of invalid uploads eventually restores the upload overlay', async 
 
 test('an invalid processed image releases its URL and can be retried', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     await e.respond(e.requests[0], { name: 'invalid response' });
     const decode = e.decodes[0];
     decode.reject(new Error('EncodingError'));
@@ -542,7 +559,7 @@ test('an invalid processed image releases its URL and can be retried', async () 
     assert.equal(e.loading(), false);
     assert.equal(e.cropper(), null);
     assert.equal(e.element('batchImages').children.length, 0);
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     await e.respond(e.requests[1], { name: 'valid response' });
     await e.decode();
     assert.equal(e.visibleImage().name, 'valid response');
@@ -552,9 +569,9 @@ test('an invalid processed image releases its URL and can be retried', async () 
 test('a stale decoding failure cannot interrupt a newer image or its loading indicator', async () => {
     for (const finishNewImage of [false, true]) {
         const e = editor();
-        e.select({ name: 'corrupt.png' }, false);
+        await e.select({ name: 'corrupt.png' }, false);
         const oldDecode = e.decodes[0];
-        e.select({ name: 'valid.png' }, false);
+        await e.select({ name: 'valid.png' }, false);
         const newDecode = e.decodes[1];
         if (finishNewImage) await e.decode(newDecode);
         oldDecode.reject(new Error('EncodingError'));
@@ -571,8 +588,8 @@ test('a stale decoding failure cannot interrupt a newer image or its loading ind
 
 test('an older response cannot replace the latest image or filename', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'A.png' });
+    await e.select({ name: 'B.png' });
     assert.equal(e.requests[0].options.signal.aborted, true);
     const result = { name: 'B without background' };
     await e.respond(e.requests[1], result);
@@ -586,8 +603,8 @@ test('an older response cannot replace the latest image or filename', async () =
 
 test('an older failure cannot dismiss the latest loading indicator or show an alert', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'A.png' });
+    await e.select({ name: 'B.png' });
     e.requests[0].reject(new Error('Network failure'));
     await flush();
     assert.equal(e.loading(), true);
@@ -600,11 +617,11 @@ test('an older failure cannot dismiss the latest loading indicator or show an al
 test('a delayed response body cannot replace a newer completed selection', async () => {
     const e = editor(),
         body = deferred();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     e.requests[0].resolve({ ok: true, blob: () => body.promise });
     await flush();
     const b = { name: 'B.png' };
-    e.select(b, false);
+    await e.select(b, false);
     await e.decode();
     body.resolve({ name: 'A result' });
     await flush();
@@ -614,10 +631,10 @@ test('a delayed response body cannot replace a newer completed selection', async
 
 test('late image decoding cannot change the preview or end newer processing', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     await e.respond(e.requests[0], { name: 'A result' });
     const oldDecode = e.decodes[0];
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'B.png' });
     await e.decode(oldDecode);
     assert.equal(e.visibleImage(), undefined);
     assert.equal(e.loading(), true);
@@ -629,10 +646,10 @@ test('late image decoding cannot change the preview or end newer processing', as
 
 test('rapid on/off/on toggles use the latest setting, even for the same file', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
-    e.toggle(false);
+    await e.select({ name: 'A.png' });
+    await e.toggle(false);
     const originalDecode = e.decodes[0];
-    e.toggle(true);
+    await e.toggle(true);
     await e.respond(e.requests[1], { name: 'latest removed background' });
     await e.decode();
     await e.decode(originalDecode);
@@ -644,8 +661,8 @@ test('rapid on/off/on toggles use the latest setting, even for the same file', a
 test('switching removal off keeps the original when the old request finishes', async () => {
     const e = editor(),
         file = { name: 'A.png' };
-    e.select(file);
-    e.toggle(false);
+    await e.select(file);
+    await e.toggle(false);
     await e.decode();
     await e.respond(e.requests[0], { name: 'removed background' });
     assert.equal(e.visibleImage(), file);
@@ -653,7 +670,7 @@ test('switching removal off keeps the original when the old request finishes', a
 
 test('removing the last image invalidates its pending decode', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     await e.respond(e.requests[0], { name: 'A result' });
     e.remove(0);
     await e.decode();
@@ -666,8 +683,8 @@ test('removing the last image invalidates its pending decode', async () => {
 
 test('removing the selected image selects a remaining image and ignores the old request', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'A.png' });
+    await e.select({ name: 'B.png' });
     e.remove(1);
     assert.equal(e.filename(), 'A.png');
     await e.respond(e.requests[1], { name: 'B result' });
@@ -679,8 +696,8 @@ test('removing the selected image selects a remaining image and ignores the old 
 
 test('removing an unselected thumbnail does not cancel the current request', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'A.png' });
+    await e.select({ name: 'B.png' });
     e.remove(0);
     assert.equal(e.requests[1].options.signal.aborted, false);
     await e.respond(e.requests[1], { name: 'B result' });
@@ -690,10 +707,10 @@ test('removing an unselected thumbnail does not cancel the current request', asy
 
 test('the previous image cannot be exported while a new selection is processing', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const previous = e.cropper();
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'B.png' });
     e.element('downloadCurrent').click();
     assert.equal(previous.destroyed, true);
     assert.equal(e.exports.length, 0);
@@ -701,10 +718,10 @@ test('the previous image cannot be exported while a new selection is processing'
 
 test('a current-image download keeps its snapshot when the user selects another image', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     e.element('downloadCurrent').click();
-    e.select({ name: 'B.png' });
+    await e.select({ name: 'B.png' });
     const blob = new Blob(['A export']);
     e.exports[0](blob);
     await flush();
@@ -720,7 +737,7 @@ test('a current-image download keeps its snapshot when the user selects another 
 
 test('switching and collapsing tools preserves the active cropper and edits', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const cropper = e.cropper();
     e.element('widthInput').value = '640';
@@ -758,7 +775,7 @@ test('close and Escape collapse the panel and restore focus to its tool', () => 
 
 test('aspect-ratio dropdown updates the existing cropper without reloading the image', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const cropper = e.cropper();
     const preset = e.element('aspectRatioPreset');
@@ -772,10 +789,10 @@ test('aspect-ratio dropdown updates the existing cropper without reloading the i
     assert.equal(cropper.destroyed, undefined);
 });
 
-test('image rail marks the selected image and restores the empty state after removal', () => {
+test('image rail marks the selected image and restores the empty state after removal', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
-    e.select({ name: 'B.png' }, false);
+    await e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'B.png' }, false);
     const rail = e.element('batchImages');
     assert.equal(rail.children[0].firstElementChild['aria-pressed'], 'false');
     assert.equal(rail.children[1].firstElementChild['aria-pressed'], 'true');
@@ -790,7 +807,7 @@ test('image rail marks the selected image and restores the empty state after rem
 test('canvas resizing waits for Cropper readiness and reuses the instance', async () => {
     const e = editor();
     e.resizeCanvas();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const cropper = e.cropper();
     cropper.ready = false;
@@ -806,7 +823,7 @@ test('canvas resizing waits for Cropper readiness and reuses the instance', asyn
 
 test('resolution inputs apply immediately without Enter, blur, or recreating the cropper', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const cropper = e.cropper();
     const width = e.element('widthInput');
@@ -828,7 +845,7 @@ test('resolution inputs apply immediately without Enter, blur, or recreating the
 test('incomplete or invalid resolution input leaves the last valid crop intact', async () => {
     const e = editor();
     e.element('widthInput').dispatchEvent(new Event('input'));
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const width = e.element('widthInput');
     const height = e.element('heightInput');
@@ -848,7 +865,7 @@ test('incomplete or invalid resolution input leaves the last valid crop intact',
 
 test('new uploads initialize native dimensions and the Original preset', async () => {
     const e = editor();
-    e.select({ name: 'square.png', width: 1151, height: 1151 }, false);
+    await e.select({ name: 'square.png', width: 1151, height: 1151 }, false);
     await e.decode();
     assert.equal(e.element('widthInput').value, '1151');
     assert.equal(e.element('heightInput').value, '1151');
@@ -861,7 +878,7 @@ test('new uploads initialize native dimensions and the Original preset', async (
     assert.equal(e.cropper().getData().height, 1151);
     e.element('widthInput').value = '700';
     e.element('widthInput').dispatchEvent(new Event('input'));
-    e.select({ name: 'portrait.png', width: 900, height: 1600 }, false);
+    await e.select({ name: 'portrait.png', width: 900, height: 1600 }, false);
     await e.decode();
     assert.equal(e.element('widthInput').value, '900');
     assert.equal(e.element('heightInput').value, '1600');
@@ -874,16 +891,17 @@ test('new uploads initialize native dimensions and the Original preset', async (
 test('background reprocessing preserves custom dimensions and reset restores native dimensions', async () => {
     const e = editor();
     const file = { name: 'square.png', width: 1151, height: 1151 };
-    e.select(file, false);
+    await e.select(file, false);
     await e.decode();
     e.element('widthInput').value = '700';
     e.element('widthInput').dispatchEvent(new Event('input'));
-    e.toggle(true);
+    await e.toggle(true);
     await e.respond(e.requests[0], file);
     await e.decode();
     assert.equal(e.element('widthInput').value, '700');
     assert.equal(e.cropper().options.aspectRatio, 700 / 1151);
     e.element('resetButton').click();
+    await flush();
     await e.respond(e.requests[1], file);
     await e.decode();
     assert.equal(e.element('widthInput').value, '1151');
@@ -893,7 +911,7 @@ test('background reprocessing preserves custom dimensions and reset restores nat
 
 test('fixed presets synchronize output fields and exported canvas with the new crop', async () => {
     const e = editor();
-    e.select({ name: 'wide.png', width: 1369, height: 500 }, false);
+    await e.select({ name: 'wide.png', width: 1369, height: 500 }, false);
     await e.decode();
     const cropper = e.cropper();
     cropper.getData = () => ({ width: 499.6, height: 499.6 });
@@ -921,7 +939,7 @@ test('fixed presets synchronize output fields and exported canvas with the new c
 
 test('Original restores native dimensions and None leaves output dimensions unchanged', async () => {
     const e = editor();
-    e.select({ name: 'wide.png', width: 1369, height: 500 }, false);
+    await e.select({ name: 'wide.png', width: 1369, height: 500 }, false);
     await e.decode();
     const preset = e.element('aspectRatioPreset');
     preset.value = '1';
@@ -942,21 +960,21 @@ test('Original restores native dimensions and None leaves output dimensions unch
 
 test('background swatches work without removal and preserve the selection across toggles', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     e.element('blackBg').click();
     assert.equal(e.cropper().options.fillColor, '#000000');
-    e.toggle(true);
+    await e.toggle(true);
     await e.respond(e.requests[0], { name: 'cutout' });
     await e.decode();
     e.element('blackBg').click();
     assert.equal(e.cropper().options.fillColor, '#000000');
     assert.equal(e.element('blackBg')['aria-pressed'], 'true');
     assert.equal(e.element('transparentBg')['aria-pressed'], 'false');
-    e.toggle(false);
+    await e.toggle(false);
     await e.decode();
     assert.equal(e.cropper().options.fillColor, '#000000');
-    e.toggle(true);
+    await e.toggle(true);
     await e.respond(e.requests[1], { name: 'cutout again' });
     await e.decode();
     assert.equal(e.cropper().options.fillColor, '#000000');
@@ -964,7 +982,7 @@ test('background swatches work without removal and preserve the selection across
 
 test('custom colour previews on input without replacing the cropper, and transparency survives reset', async () => {
     const e = editor();
-    e.select({ name: 'A.png' });
+    await e.select({ name: 'A.png' });
     await e.respond(e.requests[0], { name: 'cutout' });
     await e.decode();
     const cropper = e.cropper();
@@ -986,6 +1004,7 @@ test('custom colour previews on input without replacing the cropper, and transpa
     e.element('transparentBg').click();
     assert.equal(cropper.options.fillColor, 'transparent');
     e.element('resetButton').click();
+    await flush();
     await e.respond(e.requests[1], { name: 'reset cutout' });
     await e.decode();
     assert.equal(e.cropper().options.fillColor, 'transparent');
@@ -996,7 +1015,7 @@ test('custom colour can be chosen before uploading with removal off', async () =
     const picker = e.element('bgColor');
     picker.value = '#1256ab';
     picker.dispatchEvent(new Event('input'));
-    e.select({ name: 'transparent.png' }, false);
+    await e.select({ name: 'transparent.png' }, false);
     await e.decode();
     assert.equal(e.cropper().options.fillColor, '#1256ab');
     picker.value = '#abcdef';
@@ -1008,7 +1027,7 @@ test('custom colour can be chosen before uploading with removal off', async () =
 
 test('preset popup selects a ratio, updates dimensions, and returns focus to the field', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     e.element('presetTrigger').click();
     assert.equal(e.element('presetMenu').hidden, false);
@@ -1024,7 +1043,7 @@ test('preset popup selects a ratio, updates dimensions, and returns focus to the
 
 test('a touch blur does not dismiss the preset before its click', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     e.element('presetTrigger').click();
     const blur = new Event('focusout');
@@ -1038,7 +1057,7 @@ test('a touch blur does not dismiss the preset before its click', async () => {
 
 test('a touch blur does not dismiss the download option before its click', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     e.element('downloadMenuButton').click();
     const blur = new Event('focusout');
@@ -1056,7 +1075,7 @@ test('a touch blur does not dismiss the download option before its click', async
 
 test('menus still close when keyboard focus moves to another control', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     for (const [trigger, container, menu] of [
         ['presetTrigger', 'presetDropdown', 'presetMenu'],
@@ -1088,7 +1107,7 @@ test('preset popup supports arrow navigation and Escape without changing the sel
 
 test('rotation menu supports quarter turns and live precise angles without rebuilding the cropper', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     const cropper = e.cropper();
     e.element('rotationTool').click();
@@ -1120,7 +1139,7 @@ test('rotation menu supports quarter turns and live precise angles without rebui
 
 test('flip controls toggle independently and background reprocessing preserves transforms', async () => {
     const e = editor();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     e.element('rotateRight').click();
     e.element('flipHorizontal').click();
@@ -1131,13 +1150,14 @@ test('flip controls toggle independently and background reprocessing preserves t
     assert.equal(e.cropper().horizontalScale, 1);
     assert.equal(e.element('flipHorizontal')['aria-pressed'], 'false');
     assert.equal(e.element('flipVertical')['aria-pressed'], 'true');
-    e.toggle(true);
+    await e.toggle(true);
     await e.respond(e.requests[0], { name: 'cutout' });
     await e.decode();
     assert.equal(e.cropper().rotation, 90);
     assert.equal(e.cropper().horizontalScale, 1);
     assert.equal(e.cropper().verticalScale, -1);
     e.element('resetButton').click();
+    await flush();
     await e.respond(e.requests[1], { name: 'reset' });
     await e.decode();
     assert.equal(e.cropper().rotation, 0);
@@ -1148,11 +1168,11 @@ test('flip controls toggle independently and background reprocessing preserves t
 test('rotations wrap within the slider range and a new image starts untransformed', async () => {
     const e = editor();
     e.element('rotateRight').click();
-    e.select({ name: 'A.png' }, false);
+    await e.select({ name: 'A.png' }, false);
     await e.decode();
     for (let i = 0; i < 3; i++) e.element('rotateRight').click();
     assert.equal(e.cropper().rotation, -90);
-    e.select({ name: 'B.png' }, false);
+    await e.select({ name: 'B.png' }, false);
     await e.decode();
     assert.equal(e.cropper().rotation, 0);
     assert.equal(e.element('rotationSlider').value, '0');
@@ -1175,7 +1195,7 @@ async function encodeExport(e, index) {
 
 test('switching images restores each image’s dimensions, crop, rotation, flip, and background', async () => {
     const e = editor();
-    e.select(imageFile('A.png'), false);
+    await e.select(imageFile('A.png'), false);
     await e.decode();
     e.element('widthInput').value = '300';
     e.element('heightInput').value = '200';
@@ -1184,7 +1204,7 @@ test('switching images restores each image’s dimensions, crop, rotation, flip,
     e.element('flipHorizontal').click();
     e.element('blackBg').click();
     e.cropper().data = { x: 17, y: 29, width: 300, height: 200 };
-    e.select(imageFile('B.png'), false);
+    await e.select(imageFile('B.png'), false);
     await e.decode();
     e.element('whiteBg').click();
     e.element('batchImages').children[0].click();
@@ -1211,7 +1231,7 @@ test('ZIP contains per-image edits, unique filenames, and untouched original fil
     e.element('widthInput').dispatchEvent(new Event('input'));
     e.element('blackBg').click();
     e.element('rotateRight').click();
-    e.select(imageFile('same.png'), false);
+    await e.select(imageFile('same.png'), false);
     await e.decode();
     e.element('whiteBg').click();
     const active = e.cropper();
@@ -1260,7 +1280,7 @@ test('ZIP export is a snapshot and ignores duplicate submissions and later batch
     await e.download(true);
     assert.equal(e.exports.length, 1);
     e.remove(1);
-    e.select(imageFile('C.png'), false);
+    await e.select(imageFile('C.png'), false);
     await e.decode();
     await encodeExport(e, 0);
     await pending;
@@ -1273,7 +1293,7 @@ test('failed or incomplete exports report an error and never download a partial 
     const e = editor();
     await e.download(true);
     assert.equal(e.exports.length, 0);
-    e.select(imageFile('A.png'), false);
+    await e.select(imageFile('A.png'), false);
     await e.decode();
     const pending = e.download(true);
     e.exports[0](null);
@@ -1289,8 +1309,8 @@ test('failed or incomplete exports report an error and never download a partial 
 
 test('a batch with interrupted background processing cannot silently export the original', async () => {
     const e = editor();
-    e.select(imageFile('unfinished.png'));
-    e.select(imageFile('ready.png'), false);
+    await e.select(imageFile('unfinished.png'));
+    await e.select(imageFile('ready.png'), false);
     await e.decode();
     await e.download(true);
     assert.equal(e.downloads.length, 0);
@@ -1299,7 +1319,7 @@ test('a batch with interrupted background processing cannot silently export the 
 
 test('background swatches and live custom colours update the visible crop preview', async () => {
     const e = editor();
-    e.select(imageFile('transparent.png'), false);
+    await e.select(imageFile('transparent.png'), false);
     await e.decode();
     const preview = e.element('.cropper-view-box');
     e.element('blackBg').click();
@@ -1314,4 +1334,64 @@ test('background swatches and live custom colours update the visible crop previe
     e.element('transparentBg').click();
     assert.match(preview.style.background, /repeating-conic-gradient/);
     assert.equal(e.cropper().options.fillColor, 'transparent');
+});
+
+test('large photos are downscaled in the browser before background removal', async () => {
+    const e = editor();
+    const file = { name: 'phone.jpg', type: 'image/jpeg', width: 4032, height: 3024 };
+    await e.select(file);
+    assert.equal(e.requests.length, 0);
+    const toBlob = e.exports.at(-1);
+    assert.equal(toBlob.canvas.width, 2048);
+    assert.equal(toBlob.canvas.height, 1536);
+    assert.equal(toBlob.canvas.renderedFrom.width, 4032);
+    assert.equal(toBlob.type, 'image/jpeg');
+    const shrunk = { name: 'shrunk' };
+    toBlob(shrunk);
+    await flush();
+    assert.deepEqual(e.requests[0].options.body.entries.get('file'), {
+        value: shrunk,
+        filename: 'phone.jpg',
+    });
+});
+
+test('downscaled images that may be transparent are uploaded as PNG', async () => {
+    const e = editor();
+    await e.select({ name: 'tall.webp', type: 'image/webp', width: 1000, height: 3000 });
+    const toBlob = e.exports.at(-1);
+    assert.equal(toBlob.canvas.width, 683);
+    assert.equal(toBlob.canvas.height, 2048);
+    assert.equal(toBlob.type, 'image/png');
+});
+
+test('images within the size limit and undecodable files are uploaded unchanged', async () => {
+    for (const file of [
+        { name: 'edge.png', width: 2048, height: 1000 },
+        { name: 'odd.heic', width: 5000, height: 5000, undecodable: true },
+    ]) {
+        const e = editor();
+        await e.select(file);
+        assert.equal(e.canvases.length, 0);
+        assert.equal(e.requests[0].options.body.entries.get('file').value, file);
+    }
+});
+
+test('a failed canvas export falls back to uploading the original', async () => {
+    const e = editor();
+    const file = { name: 'big.png', width: 3000, height: 3000 };
+    await e.select(file);
+    e.exports.at(-1)(null);
+    await flush();
+    assert.equal(e.requests[0].options.body.entries.get('file').value, file);
+});
+
+test('switching images while a photo is downscaling skips its upload', async () => {
+    const e = editor();
+    await e.select({ name: 'big.jpg', type: 'image/jpeg', width: 4000, height: 3000 });
+    const toBlob = e.exports.at(-1);
+    await e.select({ name: 'next.png' }, false);
+    toBlob({ name: 'stale shrunk' });
+    await flush();
+    assert.equal(e.requests.length, 0);
+    assert.equal(e.filename(), 'next.png');
 });

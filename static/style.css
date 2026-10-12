@@ -307,6 +307,16 @@ body {
   white-space: normal;
 }
 
+.privacy-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.download-caret {
+  margin-left: 4px;
+}
+
 /* Cropper styles */
 .cropper-container {
   background: none !important;

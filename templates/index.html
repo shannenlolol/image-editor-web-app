@@ -9,8 +9,7 @@
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="/static/assets/favicon.png" />
     <link rel="shortcut icon" type="image/png" href="/static/assets/favicon.png" />
-    <!-- Include the Cropper CSS file -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.9/cropper.min.css" rel="stylesheet" />
+    <link href="/static/vendor/cropper.min.css" rel="stylesheet" />
     <!-- Link to your custom CSS file -->
     <link href="/static/style.css" rel="stylesheet" />
 </head>
@@ -42,7 +41,7 @@
                 <div class="download-control" id="downloadControl">
                     <button type="button" id="downloadMenuButton" class="download-btn" aria-expanded="false"
                         aria-controls="downloadMenu" disabled>
-                        Download <span aria-hidden="true" style="margin-left: 4px;">▾</span>
+                        Download <span class="download-caret" aria-hidden="true">▾</span>
                     </button>
                     <div id="downloadMenu" class="download-menu" hidden>
                         <button type="button" id="downloadCurrent">
@@ -249,9 +248,10 @@
                                 Drag and drop images here or
                             </p>
                             <label for="imageInput" class="upload-btn">Upload Images</label>
+                            <p class="privacy-note">Images are processed in memory and never stored.</p>
                         </div>
                     </div>
-                    <img id="image" style="display: none" />
+                    <img id="image" />
                 </div>
 
                 <div class="zoom-controls">
@@ -272,8 +272,7 @@
             </aside>
         </main>
 
-        <!-- Include the Cropper JS file -->
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.9/cropper.min.js"></script>
+        <script src="/static/vendor/cropper.min.js"></script>
         <script src="/static/vendor/jszip.min.js"></script>
         <script src="/static/editor.js"></script>
         <script src="/static/controls.js"></script>
