@@ -5,3 +5,4 @@ virtualenv/
 *.py[cod]
 AGENTS.md
 TODO.md
+.DS_Store

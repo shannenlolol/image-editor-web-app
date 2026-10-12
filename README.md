@@ -22,36 +22,36 @@ You can use the app directly here:
 ## How it works
 
 ### Main Interface
-![Main interface showing the upload area and editing tools](static/assets/screenshots/main_interface.png)
+![Main interface showing the upload area and editing tools](static/assets/screenshots/main_interface.webp)
 
 ### Remove Background
-![Background removal feature before](static/assets/screenshots/background_removal_before.png)
-![Background removal feature after](static/assets/screenshots/background_removal_after.png)
+![Background removal feature before](static/assets/screenshots/background_removal_before.webp)
+![Background removal feature after](static/assets/screenshots/background_removal_after.webp)
 
 ### Change Background
-![Changing the background colour](static/assets/screenshots/change_background.png)
+![Changing the background colour](static/assets/screenshots/change_background.webp)
 
 ### Resize and Aspect Ratio
-![Changing the dimensions and aspect ratio](static/assets/screenshots/resize_resolution_aspect_ratio.png)
+![Changing the dimensions and aspect ratio](static/assets/screenshots/resize_resolution_aspect_ratio.webp)
 
 ### Rotate and Flip
-![Rotating and flipping an image](static/assets/screenshots/rotate_flip.png)
+![Rotating and flipping an image](static/assets/screenshots/rotate_flip.webp)
 
 ### Multiple Images
-![Uploading and browsing multiple images](static/assets/screenshots/upload_multiple.png)
+![Uploading and browsing multiple images](static/assets/screenshots/upload_multiple.webp)
 
 ### Download
-![Download menu with current image and ZIP options](static/assets/screenshots/download_menu.png)
+![Download menu with current image and ZIP options](static/assets/screenshots/download_menu.webp)
 
 ### Dark Mode
-![The app in dark mode](static/assets/screenshots/dark_mode.png)
+![The app in dark mode](static/assets/screenshots/dark_mode.webp)
 
 ## Run it locally (optional)
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/ImageEditorWebApp.git
-cd ImageEditorWebApp
+git clone https://github.com/shannenlolol/image-editor-web-app.git
+cd image-editor-web-app
 ```
 
 2. Create a virtual environment (recommended):

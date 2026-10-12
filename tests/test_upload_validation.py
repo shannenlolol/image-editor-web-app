@@ -17,7 +17,7 @@ spec = importlib.util.spec_from_file_location(
     'upload_test_app', Path(__file__).resolve().parents[1] / 'app.py'
 )
 backend = importlib.util.module_from_spec(spec)
-with patch.dict(sys.modules, {'rembg': types.SimpleNamespace(remove=Mock())}):
+with patch.dict(sys.modules, {'rembg': types.SimpleNamespace(remove=Mock(), new_session=Mock())}):
     spec.loader.exec_module(backend)
 
 
@@ -38,7 +38,7 @@ def oversized_png(width, height):
 class UploadValidationTests(unittest.TestCase):
     def setUp(self):
         self.client = backend.app.test_client()
-        self.inference = patch.object(backend, 'remove', side_effect=lambda image: image)
+        self.inference = patch.object(backend, 'remove', side_effect=lambda image, **kwargs: image)
         self.remove = self.inference.start()
         self.addCleanup(self.inference.stop)
 
