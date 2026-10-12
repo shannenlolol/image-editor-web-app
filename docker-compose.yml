@@ -1,0 +1,10 @@
+services:
+  editor:
+    build: .
+    restart: unless-stopped
+    init: true
+    # Only reachable from the NAS itself; the Cloudflare Tunnel publishes it.
+    ports:
+      - "127.0.0.1:8081:8000"
+    # About 300 MB idle, about 800 MB while removing two backgrounds at once.
+    mem_limit: 1200m
