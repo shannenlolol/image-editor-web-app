@@ -1,0 +1,13 @@
+.git
+.gitignore
+.DS_Store
+**/.DS_Store
+__pycache__
+*.pyc
+venv
+.venv
+tests
+README.md
+AGENTS.md
+TODO.md
+static/assets/screenshots
