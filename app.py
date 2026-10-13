@@ -2,6 +2,10 @@ from flask import Flask, request, send_file, render_template, jsonify
 from rembg import remove, new_session
 from PIL import Image, UnidentifiedImageError
 from io import BytesIO
+from collections import deque
+import os
+import threading
+import time
 import warnings
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -11,6 +15,64 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
 app.config['MAX_IMAGE_PIXELS'] = 25_000_000
 SUPPORTED_IMAGE_FORMATS = {'PNG', 'JPEG', 'WEBP', 'GIF', 'BMP', 'TIFF'}
+# Only trust Cloudflare's client IP header behind the tunnel; anywhere else a
+# client could send it themselves to dodge the rate limit.
+app.config['TRUST_CF_CONNECTING_IP'] = os.environ.get('TRUST_CF_CONNECTING_IP') == '1'
+app.config['REMOVAL_RATE_LIMIT'] = 10
+app.config['REMOVAL_RATE_WINDOW_SECONDS'] = 60
+
+# Each removal holds about 250 MB, so cap how many run at once regardless of
+# how many clients get past the per-IP limits.
+MAX_CONCURRENT_REMOVALS = 2
+removal_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REMOVALS)
+
+# Sliding-window rate limit per client IP: a deque of recent request times.
+# In-memory is enough because the app runs as a single process.
+recent_removals = {}
+recent_removals_lock = threading.Lock()
+
+CONTENT_SECURITY_POLICY = '; '.join([
+    "default-src 'self'",
+    # Cropper's stylesheet draws its checkerboard from a data: URL, and the
+    # editor previews images through blob: URLs.
+    "img-src 'self' data: blob:",
+    # Cropper reads blob: images with XMLHttpRequest to check EXIF orientation.
+    "connect-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+
+
+def client_ip():
+    if app.config['TRUST_CF_CONNECTING_IP']:
+        return request.headers.get('CF-Connecting-IP') or request.remote_addr
+    return request.remote_addr
+
+
+def rate_limited(ip):
+    now = time.monotonic()
+    window = app.config['REMOVAL_RATE_WINDOW_SECONDS']
+    with recent_removals_lock:
+        # Drop idle clients so the table does not grow with every IP ever seen.
+        for key in [key for key, times in recent_removals.items() if now - times[-1] >= window]:
+            del recent_removals[key]
+        times = recent_removals.setdefault(ip, deque())
+        while times and now - times[0] >= window:
+            times.popleft()
+        if len(times) >= app.config['REMOVAL_RATE_LIMIT']:
+            return True
+        times.append(now)
+        return False
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['Content-Security-Policy'] = CONTENT_SECURITY_POLICY
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -21,8 +83,14 @@ def request_too_large(error):
 def index():
     return render_template('index.html')
 
+@app.route('/healthz')
+def healthz():
+    return 'ok', 200, {'Content-Type': 'text/plain'}
+
 @app.route('/remove-bg', methods=['POST'])
 def remove_bg():
+    if rate_limited(client_ip()):
+        return jsonify({'message': 'Too many requests. Please wait a minute and try again.'}), 429
     if 'file' not in request.files:
         return jsonify({'message': 'No file part'}), 400
     file = request.files['file']
@@ -51,7 +119,12 @@ def remove_bg():
         return jsonify({'message': 'Invalid or damaged image. Upload a supported image file.'}), 400
 
     with input_image:
-        output_image = remove(input_image, session=bg_session)
+        if not removal_slots.acquire(blocking=False):
+            return jsonify({'message': 'Busy, please try again in a few seconds.'}), 503
+        try:
+            output_image = remove(input_image, session=bg_session)
+        finally:
+            removal_slots.release()
         img_byte_arr = BytesIO()
         output_image.save(img_byte_arr, format='PNG')
         img_byte_arr.seek(0)

@@ -16,6 +16,7 @@ window.ImageEditor = (() => {
     let rotationAngle = 0;
     let horizontalScale = 1;
     let verticalScale = 1;
+    const MAX_UPLOAD_SIDE = 2048;
     const previewImage = document.getElementById('image');
     const fileInput = document.getElementById('imageInput');
     const removeBgCheckbox = document.getElementById('removeBg');
@@ -163,6 +164,32 @@ window.ImageEditor = (() => {
         }
     }
 
+    // Phone photos are 12 MP+, which background removal does not need. Downscale
+    // before upload to cut transfer and server time. If the browser cannot decode
+    // the file, send it unchanged so the server can explain what is wrong with it.
+    async function shrinkForUpload(file) {
+        let bitmap;
+        try {
+            bitmap = await createImageBitmap(file);
+        } catch (_) {
+            return file;
+        }
+        try {
+            const scale = MAX_UPLOAD_SIDE / Math.max(bitmap.width, bitmap.height);
+            if (scale >= 1) return file;
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.round(bitmap.width * scale);
+            canvas.height = Math.round(bitmap.height * scale);
+            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            // JPEG keeps photos small; other formats may be transparent, so use PNG.
+            const type = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, 0.92));
+            return blob || file;
+        } finally {
+            bitmap.close();
+        }
+    }
+
     async function processSelectedImage(
         file,
         shouldRemoveBg = true,
@@ -186,8 +213,10 @@ window.ImageEditor = (() => {
         try {
             let blob = file;
             if (shouldRemoveBg) {
+                const upload = await shrinkForUpload(file);
+                if (requestId !== imageRequestId) return;
                 const formData = new FormData();
-                formData.append('file', file);
+                formData.append('file', upload, file.name);
                 failureMessage = 'Could not reach background removal. Check your connection and upload the image again to retry.';
                 const response = await fetch('/remove-bg', {
                     method: 'POST',
@@ -281,6 +310,17 @@ window.ImageEditor = (() => {
         if (files && files.length) {
             handleFiles(Array.from(files));
         }
+    });
+
+    // Paste screenshots or copied images anywhere on the page. Text pastes carry
+    // no image files, so they still reach the focused input untouched.
+    document.addEventListener('paste', (e) => {
+        const files = Array.from(e.clipboardData?.files || []).filter((file) =>
+            file.type.startsWith('image/'),
+        );
+        if (!files.length) return;
+        e.preventDefault();
+        handleFiles(files);
     });
 
     function handleFiles(files) {
