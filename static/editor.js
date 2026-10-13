@@ -312,6 +312,17 @@ window.ImageEditor = (() => {
         }
     });
 
+    // Paste screenshots or copied images anywhere on the page. Text pastes carry
+    // no image files, so they still reach the focused input untouched.
+    document.addEventListener('paste', (e) => {
+        const files = Array.from(e.clipboardData?.files || []).filter((file) =>
+            file.type.startsWith('image/'),
+        );
+        if (!files.length) return;
+        e.preventDefault();
+        handleFiles(files);
+    });
+
     function handleFiles(files) {
         if (!files.length) return;
         const defaults = {

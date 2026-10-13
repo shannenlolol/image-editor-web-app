@@ -108,10 +108,11 @@ function editor({ webpEncoding = true } = {}) {
             revoked.add(url);
         },
     };
+    const documentEvents = new EventTarget();
     const context = vm.createContext({
         document: {
             documentElement: { dataset: {} },
-            addEventListener() {},
+            addEventListener: (...args) => documentEvents.addEventListener(...args),
             getElementById: element,
             querySelector: (selector) => {
                 const knownSelectors = [
@@ -295,7 +296,16 @@ function editor({ webpEncoding = true } = {}) {
         task.resolve();
         await flush();
     }
+    // Node's Event has no clipboardData, so attach a minimal one.
+    async function paste(files) {
+        const event = new Event('paste', { cancelable: true });
+        event.clipboardData = { files };
+        documentEvents.dispatchEvent(event);
+        await flush();
+        return event.defaultPrevented;
+    }
     return {
+        paste,
         leavingWouldPrompt: () => {
             const event = new Event('beforeunload', { cancelable: true });
             // BeforeUnloadEvent has a writable returnValue, unlike Node's Event.
@@ -1512,4 +1522,27 @@ test('arrow keys move between download actions but not inside the export options
     assert.equal(press(e.element('exportFormat')), false);
     assert.equal(press(e.element('downloadCurrent')), true);
     assert.equal(e.element('downloadAll').focused, true);
+});
+
+test('pasting images adds them like an upload and selects the first', async () => {
+    const e = editor();
+    const screenshot = { name: 'image.png', type: 'image/png' };
+    const photo = { name: 'photo.jpg', type: 'image/jpeg' };
+    e.element('removeBg').checked = false;
+    assert.equal(
+        await e.paste([screenshot, { name: 'notes.txt', type: 'text/plain' }, photo]),
+        true,
+    );
+    assert.equal(e.element('batchImages').children.length, 2);
+    assert.equal(e.filename(), 'image.png');
+    await e.decode();
+    assert.equal(e.visibleImage(), screenshot);
+});
+
+test('pasting text or nothing is left to the browser', async () => {
+    const e = editor();
+    assert.equal(await e.paste([]), false);
+    assert.equal(await e.paste([{ name: 'notes.txt', type: 'text/plain' }]), false);
+    assert.equal(e.element('batchImages').children.length, 0);
+    assert.equal(e.decodes.length, 0);
 });
