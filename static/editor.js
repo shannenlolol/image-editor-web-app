@@ -17,6 +17,10 @@ window.ImageEditor = (() => {
     let horizontalScale = 1;
     let verticalScale = 1;
     const MAX_UPLOAD_SIDE = 2048;
+    // The server straightens photos by their EXIF orientation before computing
+    // the mask, so decode them the same way. Stated explicitly because older
+    // browsers defaulted to ignoring EXIF orientation here.
+    const UPRIGHT = { imageOrientation: 'from-image' };
     const previewImage = document.getElementById('image');
     const fileInput = document.getElementById('imageInput');
     const removeBgCheckbox = document.getElementById('removeBg');
@@ -164,19 +168,20 @@ window.ImageEditor = (() => {
         }
     }
 
-    // Phone photos are 12 MP+, which background removal does not need. Downscale
-    // before upload to cut transfer and server time. If the browser cannot decode
-    // the file, send it unchanged so the server can explain what is wrong with it.
-    async function shrinkForUpload(file) {
+    // Phone photos are 12 MP+, which mask detection does not need. Downscale
+    // before upload to cut transfer and server time; applyMask restores full
+    // resolution. Files the browser cannot decode (such as TIFF) are sent
+    // unchanged, and the server returns the finished cut-out for those instead.
+    async function prepareUpload(file) {
         let bitmap;
         try {
-            bitmap = await createImageBitmap(file);
+            bitmap = await createImageBitmap(file, UPRIGHT);
         } catch (_) {
-            return file;
+            return { upload: file, decodable: false };
         }
         try {
             const scale = MAX_UPLOAD_SIDE / Math.max(bitmap.width, bitmap.height);
-            if (scale >= 1) return file;
+            if (scale >= 1) return { upload: file, decodable: true };
             const canvas = document.createElement('canvas');
             canvas.width = Math.round(bitmap.width * scale);
             canvas.height = Math.round(bitmap.height * scale);
@@ -184,10 +189,41 @@ window.ImageEditor = (() => {
             // JPEG keeps photos small; other formats may be transparent, so use PNG.
             const type = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
             const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, 0.92));
-            return blob || file;
+            return { upload: blob || file, decodable: true };
         } finally {
             bitmap.close();
         }
+    }
+
+    // Rebuild the cut-out at the original's full size: stretch the (possibly
+    // smaller) mask over the photo, then use its brightness as transparency.
+    async function applyMask(file, maskBlob) {
+        const image = await createImageBitmap(file, UPRIGHT);
+        const canvas = document.createElement('canvas');
+        let mask;
+        try {
+            mask = await createImageBitmap(maskBlob);
+            canvas.width = image.width;
+            canvas.height = image.height;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            if (!context) throw new Error('Could not create the cut-out canvas.');
+            context.drawImage(mask, 0, 0, canvas.width, canvas.height);
+            const coverage = context.getImageData(0, 0, canvas.width, canvas.height).data;
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            context.drawImage(image, 0, 0);
+            const cutout = context.getImageData(0, 0, canvas.width, canvas.height);
+            const pixels = cutout.data;
+            // The mask is greyscale, so its red channel is the coverage. Multiply
+            // so pixels that were already transparent in the original stay so.
+            for (let alpha = 3; alpha < pixels.length; alpha += 4)
+                pixels[alpha] = (pixels[alpha] * coverage[alpha - 3]) / 255;
+            context.putImageData(cutout, 0, 0);
+        } finally {
+            // Release the decoded photo and mask before the slow PNG encode.
+            image.close();
+            if (mask) mask.close();
+        }
+        return canvasToBlob(canvas);
     }
 
     async function processSelectedImage(
@@ -213,12 +249,12 @@ window.ImageEditor = (() => {
         try {
             let blob = file;
             if (shouldRemoveBg) {
-                const upload = await shrinkForUpload(file);
+                const { upload, decodable } = await prepareUpload(file);
                 if (requestId !== imageRequestId) return;
                 const formData = new FormData();
                 formData.append('file', upload, file.name);
                 failureMessage = 'Could not reach background removal. Check your connection and upload the image again to retry.';
-                const response = await fetch('/remove-bg', {
+                const response = await fetch(decodable ? '/remove-bg/mask' : '/remove-bg', {
                     method: 'POST',
                     body: formData,
                     signal: controller.signal,
@@ -241,6 +277,11 @@ window.ImageEditor = (() => {
                 }
                 failureMessage = 'Could not read the processed image. Upload the image again to retry.';
                 blob = await response.blob();
+                if (decodable) {
+                    if (requestId !== imageRequestId) return;
+                    failureMessage = 'Could not apply the background removal. Upload the image again to retry.';
+                    blob = await applyMask(file, blob);
+                }
             }
             if (requestId !== imageRequestId) return;
 
