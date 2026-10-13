@@ -1423,6 +1423,43 @@ test('switching images while a photo is downscaling skips its upload', async () 
     assert.equal(e.filename(), 'next.png');
 });
 
+test('toggling removal on a downscaled photo keeps the crop on the same area', async () => {
+    const e = editor();
+    await e.select({ name: 'photo.jpg', type: 'image/jpeg', width: 4000, height: 3000 }, false);
+    await e.decode();
+    e.cropper().data = { x: 1000, y: 600, width: 2000, height: 1500 };
+    await e.toggle(true);
+    e.exports.at(-1)({ name: 'shrunk' });
+    await flush();
+    await e.respond(e.requests[0], { name: 'cutout', width: 2048, height: 1536 });
+    await e.decode();
+    const shrunk = e.cropper().getData();
+    assert.deepEqual(
+        [shrunk.x, shrunk.y, shrunk.width, shrunk.height],
+        [512, 307.2, 1024, 768],
+    );
+    // Switching back restores the crop in the full-size photo's pixels.
+    await e.toggle(false);
+    await e.decode();
+    const full = e.cropper().getData();
+    assert.deepEqual(
+        [full.x, full.y, full.width, full.height],
+        [1000, 600, 2000, 1500],
+    );
+});
+
+test('reprocessing at the same size leaves the crop untouched', async () => {
+    const e = editor();
+    await e.select({ name: 'small.png', width: 800, height: 600 }, false);
+    await e.decode();
+    e.cropper().data = { x: 13, y: 7, width: 333, height: 250 };
+    await e.toggle(true);
+    await e.respond(e.requests[0], { name: 'cutout', width: 800, height: 600 });
+    await e.decode();
+    const data = e.cropper().getData();
+    assert.deepEqual([data.x, data.y, data.width, data.height], [13, 7, 333, 250]);
+});
+
 async function editedImage(name = 'A.png') {
     const e = editor();
     await e.select({ name }, false);

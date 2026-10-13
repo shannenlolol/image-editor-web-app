@@ -266,6 +266,29 @@ window.ImageEditor = (() => {
             if (requestId !== imageRequestId) return;
             failureMessage = 'Could not prepare the editor. Upload the image again to retry.';
 
+            // Background removal returns large photos downscaled, so toggling it
+            // swaps between two sizes of the same picture. The kept crop is in the
+            // previous image's pixels; rescale it so it covers the same area.
+            const size = { width: preview.naturalWidth, height: preview.naturalHeight };
+            const previous = record.imageSize;
+            if (
+                !resetEdits &&
+                record.cropData &&
+                previous &&
+                (previous.width !== size.width || previous.height !== size.height)
+            ) {
+                const scaleX = size.width / previous.width;
+                const scaleY = size.height / previous.height;
+                record.cropData = {
+                    ...record.cropData,
+                    x: record.cropData.x * scaleX,
+                    y: record.cropData.y * scaleY,
+                    width: record.cropData.width * scaleX,
+                    height: record.cropData.height * scaleY,
+                };
+            }
+            record.imageSize = size;
+
             if (resetEdits) {
                 controls.resetImageTransform();
                 sourceDimensions = {
