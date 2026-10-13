@@ -1,12 +1,12 @@
-# Builds the Docker image on every push to main and publishes it to GitHub
-# Container Registry, where Watchtower on the NAS picks it up. The NAS then
-# never builds the image itself.
+# Builds the Docker image when a release tag (vMAJOR.MINOR.PATCH, such as
+# v1.1.0) is pushed, and publishes it to GitHub Container Registry, where
+# Watchtower on the NAS picks it up. Merging to main alone deploys nothing;
+# tag a release when it is ready.
 name: Publish image
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -28,16 +28,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tags each image "latest" (what the NAS runs) and with its commit, so an
-      # older version can be pinned if an update misbehaves. Also adds the
-      # labels that link the package to this repository.
+      # A tag such as v1.1.0 is published as 1.1.0, 1.1 and latest (what the NAS
+      # runs), so an earlier release can be pinned if an update misbehaves.
+      # Pre-releases such as v1.2.0-rc1 never become latest. Also adds the labels that link the
+      # package to this repository.
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest
-            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - uses: docker/build-push-action@v6
         with:
@@ -46,6 +47,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Skip build attestations, which GHCR lists as extra untagged versions.
+          provenance: false
+          sbom: false
           # Reuse unchanged layers (mainly the Python packages) between runs.
           cache-from: type=gha
           cache-to: type=gha,mode=max

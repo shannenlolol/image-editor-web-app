@@ -77,7 +77,7 @@ http://localhost:5000
 
 ## Self-host with Docker
 
-Every push to `main` publishes a ready-built image (Intel and ARM) to `ghcr.io/shannenlolol/image-editor-web-app`, so the server only downloads it:
+Each release publishes a ready-built image (Intel and ARM) to `ghcr.io/shannenlolol/image-editor-web-app`, so the server only downloads it:
 
 ```bash
 git clone https://github.com/shannenlolol/image-editor-web-app.git
@@ -87,9 +87,16 @@ docker compose up -d
 curl http://127.0.0.1:8081/healthz   # prints "ok"
 ```
 
+To publish a release, tag the commit on `main` and push the tag. The image appears as `1.1.0`, `1.1` and `latest`:
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
 The app only listens on `127.0.0.1:8081`; publish it through a reverse proxy or a Cloudflare Tunnel. `docker-compose.yml` sets `TRUST_CF_CONNECTING_IP=1`, which is only safe behind Cloudflare: remove it otherwise.
 
-The container is labelled for [Watchtower](https://containrrr.dev/watchtower/), which installs new images automatically. If Watchtower is not already running on the server, add this service to `docker-compose.yml`:
+The container is labelled for [Watchtower](https://containrrr.dev/watchtower/), which installs each new release automatically. If Watchtower is not already running on the server, add this service to `docker-compose.yml`:
 
 ```yaml
   watchtower:
