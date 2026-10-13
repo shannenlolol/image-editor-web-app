@@ -44,6 +44,24 @@
                         Download <span class="download-caret" aria-hidden="true">▾</span>
                     </button>
                     <div id="downloadMenu" class="download-menu" hidden>
+                        <div class="export-options">
+                            <div class="export-row">
+                                <label for="exportFormat">Format</label>
+                                <select id="exportFormat">
+                                    <option value="image/png">PNG</option>
+                                    <option value="image/jpeg">JPEG</option>
+                                    <option value="image/webp" id="exportFormatWebp">WebP</option>
+                                </select>
+                            </div>
+                            <div class="export-row" id="exportQualityRow" hidden>
+                                <label for="exportQuality">Quality</label>
+                                <input type="range" id="exportQuality" min="10" max="100" step="5" value="90" />
+                                <output id="exportQualityValue" for="exportQuality">90%</output>
+                            </div>
+                            <p class="export-note" id="exportNote" hidden>
+                                JPEG has no transparency, so transparent areas become white.
+                            </p>
+                        </div>
                         <button type="button" id="downloadCurrent">
                             Download current image
                         </button>
@@ -79,6 +97,20 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"
                         stroke-linejoin="miter" aria-hidden="true">
                         <path d="M6.5 9 8 4l12 4-0.4 1M5.5 15 5 17l12 4 2-6M2 12h20" />
+                    </svg>
+                </button>
+                <button type="button" id="undoButton" class="tool-button undo-tool" aria-label="Undo"
+                    title="Undo (Ctrl/⌘+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true">
+                        <path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+                    </svg>
+                </button>
+                <button type="button" id="redoButton" class="tool-button" aria-label="Redo"
+                    title="Redo (Ctrl/⌘+Shift+Z)" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true">
+                        <path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
                     </svg>
                 </button>
                 <button type="button" id="resetButton" class="tool-button reset-tool" aria-label="Reset to Original"
@@ -245,7 +277,7 @@
                     <div class="upload-placeholder" id="uploadPlaceholder">
                         <div class="upload-content">
                             <p class="no-image-text">
-                                Drag and drop images here or
+                                Drag and drop or paste images here, or
                             </p>
                             <label for="imageInput" class="upload-btn">Upload Images</label>
                             <p class="privacy-note">Images are processed in memory and never stored.</p>

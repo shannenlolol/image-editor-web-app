@@ -17,6 +17,7 @@ window.ImageEditor = (() => {
     let horizontalScale = 1;
     let verticalScale = 1;
     const MAX_UPLOAD_SIDE = 2048;
+    const HISTORY_LIMIT = 50;
     // The server straightens photos by their EXIF orientation before computing
     // the mask, so decode them the same way. Stated explicitly because older
     // browsers defaulted to ignoring EXIF orientation here.
@@ -39,6 +40,17 @@ window.ImageEditor = (() => {
         loadingOverlay.style.display = 'none';
     }
 
+    function currentAspectRatio() {
+        const preset = document.getElementById('aspectRatioPreset');
+        return preset.value === 'free'
+            ? NaN
+            : preset.value === 'original'
+              ? sourceDimensions.width / sourceDimensions.height
+              : preset.value === 'custom'
+                ? Number(widthInput.value) / Number(heightInput.value)
+                : Number(preset.value);
+    }
+
     function initCropper(record) {
         const requestId = imageRequestId;
         if (cropper) {
@@ -47,18 +59,9 @@ window.ImageEditor = (() => {
 
         previewImage.style.display = 'block';
         uploadPlaceholder.style.display = 'none';
-        const preset = document.getElementById('aspectRatioPreset');
-        const ratio =
-            preset.value === 'free'
-                ? NaN
-                : preset.value === 'original'
-                  ? sourceDimensions.width / sourceDimensions.height
-                  : preset.value === 'custom'
-                    ? Number(widthInput.value) / Number(heightInput.value)
-                    : Number(preset.value);
 
         const options = {
-            aspectRatio: ratio,
+            aspectRatio: currentAspectRatio(),
             viewMode: 0,
             autoCropArea: 1,
             background: true,
@@ -85,6 +88,10 @@ window.ImageEditor = (() => {
             wheelZoomRatio: 0.1,
             minZoom: 0.01, // Allow zooming out to 1% of original size
             maxZoom: 100, // Allow zooming in to 10000% of original size
+            // Fires once a crop-box drag or resize finishes, not on every frame.
+            cropend: function () {
+                if (requestId === imageRequestId) commitEdit();
+            },
             ready: function () {
                 if (requestId !== imageRequestId || !cropper) return;
                 controls.applyImageTransform();
@@ -129,6 +136,10 @@ window.ImageEditor = (() => {
                     scaleX: horizontalScale,
                     scaleY: verticalScale,
                 });
+                // Re-baseline on every load: revisiting an image keeps its history,
+                // but the restored crop may differ by rounding from the saved one.
+                record.history = record.history || { past: [], future: [] };
+                record.history.current = takeSnapshot();
                 controls.updateDownloadState();
             },
         };
@@ -296,6 +307,29 @@ window.ImageEditor = (() => {
             if (requestId !== imageRequestId) return;
             failureMessage = 'Could not prepare the editor. Upload the image again to retry.';
 
+            // Background removal returns large photos downscaled, so toggling it
+            // swaps between two sizes of the same picture. The kept crop is in the
+            // previous image's pixels; rescale it so it covers the same area.
+            const size = { width: preview.naturalWidth, height: preview.naturalHeight };
+            const previous = record.imageSize;
+            if (
+                !resetEdits &&
+                record.cropData &&
+                previous &&
+                (previous.width !== size.width || previous.height !== size.height)
+            ) {
+                const scaleX = size.width / previous.width;
+                const scaleY = size.height / previous.height;
+                record.cropData = {
+                    ...record.cropData,
+                    x: record.cropData.x * scaleX,
+                    y: record.cropData.y * scaleY,
+                    width: record.cropData.width * scaleX,
+                    height: record.cropData.height * scaleY,
+                };
+            }
+            record.imageSize = size;
+
             if (resetEdits) {
                 controls.resetImageTransform();
                 sourceDimensions = {
@@ -351,6 +385,17 @@ window.ImageEditor = (() => {
         if (files && files.length) {
             handleFiles(Array.from(files));
         }
+    });
+
+    // Paste screenshots or copied images anywhere on the page. Text pastes carry
+    // no image files, so they still reach the focused input untouched.
+    document.addEventListener('paste', (e) => {
+        const files = Array.from(e.clipboardData?.files || []).filter((file) =>
+            file.type.startsWith('image/'),
+        );
+        if (!files.length) return;
+        e.preventDefault();
+        handleFiles(files);
     });
 
     function handleFiles(files) {
@@ -420,6 +465,58 @@ window.ImageEditor = (() => {
         controls.syncPresetMenu();
         controls.syncRotationControls();
         controls.syncBackgroundControls();
+    }
+
+    // Each image keeps its own history of whole-editor snapshots. Undo restores
+    // a snapshot onto the live cropper, so no image is reprocessed.
+    function takeSnapshot() {
+        return { settings: captureImageSettings(), cropData: { ...cropper.getData() } };
+    }
+
+    function historyReady() {
+        const record = imageRecords.get(selectedFile);
+        return record && record.history && cropper && cropper.ready && !imageAbortController
+            ? record.history
+            : null;
+    }
+
+    function commitEdit() {
+        const history = historyReady();
+        if (!history) return;
+        const snapshot = takeSnapshot();
+        if (JSON.stringify(snapshot) === JSON.stringify(history.current)) return;
+        history.past.push(history.current);
+        if (history.past.length > HISTORY_LIMIT) history.past.shift();
+        history.current = snapshot;
+        history.future = [];
+        controls.updateDownloadState();
+    }
+
+    function applySnapshot({ settings, cropData }) {
+        restoreImageSettings(settings);
+        cropper.setAspectRatio(currentAspectRatio());
+        controls.applyImageTransform();
+        cropper.setData(cropData);
+        controls.updateBackgroundColor(selectedBackground);
+    }
+
+    function stepHistory(from, to) {
+        // Record an edit still in progress (such as a typed width) so it can be redone.
+        commitEdit();
+        const history = historyReady();
+        if (!history || !history[from].length) return;
+        history[to].push(history.current);
+        history.current = history[from].pop();
+        applySnapshot(history.current);
+        controls.updateDownloadState();
+    }
+
+    // Background removal and Reset replace the image itself, so earlier
+    // snapshots no longer apply to it.
+    function clearHistory() {
+        const record = imageRecords.get(selectedFile);
+        if (record) record.history = null;
+        controls.updateDownloadState();
     }
 
     // Capture pixels before destroying the cropper. An inactive image's canvas is immutable,
@@ -604,14 +701,35 @@ window.ImageEditor = (() => {
         return canvas;
     }
 
-    function canvasToBlob(canvas) {
+    const EXPORT_EXTENSIONS = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/webp': 'webp',
+    };
+    const PNG_EXPORT = { type: 'image/png' };
+
+    function canvasToBlob(canvas, format = PNG_EXPORT) {
+        let source = canvas;
+        if (format.type === 'image/jpeg') {
+            // JPEG has no alpha channel; without a backdrop, browsers turn
+            // transparent pixels black.
+            source = document.createElement('canvas');
+            source.width = canvas.width;
+            source.height = canvas.height;
+            const context = source.getContext('2d');
+            if (!context) throw new Error('Could not create the download canvas.');
+            context.fillStyle = '#ffffff';
+            context.fillRect(0, 0, source.width, source.height);
+            context.drawImage(canvas, 0, 0);
+        }
         return new Promise((resolve, reject) => {
-            canvas.toBlob(
+            source.toBlob(
                 (blob) =>
                     blob
                         ? resolve(blob)
                         : reject(new Error('Could not encode the image.')),
-                'image/png',
+                format.type,
+                format.quality,
             );
         });
     }
@@ -645,7 +763,7 @@ window.ImageEditor = (() => {
         return filename;
     }
 
-    function exportSnapshot(record, usedNames) {
+    function exportSnapshot(record, usedNames, extension) {
         if (record.status === 'unvisited') {
             return {
                 filename: uniqueFilename(record.file.name, usedNames),
@@ -661,16 +779,17 @@ window.ImageEditor = (() => {
                 `Cannot export ${record.file.name}. Select it and finish processing with valid dimensions, then retry.`,
             );
         }
-        const name = `edited_${record.file.name.replace(/\.[^/.]+$/, '')}.png`;
+        const name = `edited_${record.file.name.replace(/\.[^/.]+$/, '')}.${extension}`;
         return {
             filename: uniqueFilename(name, usedNames),
             canvas: record.savedCanvas,
         };
     }
 
-    async function downloadImages(allImages = false) {
+    async function downloadImages(allImages = false, format = PNG_EXPORT) {
         if (exportBusy || !cropper || !cropper.ready || imageAbortController)
             return;
+        if (!EXPORT_EXTENSIONS[format.type]) format = PNG_EXPORT;
         exportBusy = true;
         controls.updateDownloadState();
         try {
@@ -682,7 +801,7 @@ window.ImageEditor = (() => {
                 ? [...imageRecords.values()]
                 : [imageRecords.get(selectedFile)];
             const snapshots = records.map((record) =>
-                exportSnapshot(record, usedNames),
+                exportSnapshot(record, usedNames, EXPORT_EXTENSIONS[format.type]),
             );
             if (allImages) {
                 const zip = new window.JSZip();
@@ -692,7 +811,7 @@ window.ImageEditor = (() => {
                     );
                     const entry = snapshots[index];
                     const blob =
-                        entry.blob || (await canvasToBlob(entry.canvas));
+                        entry.blob || (await canvasToBlob(entry.canvas, format));
                     zip.file(entry.filename, await blob.arrayBuffer());
                 }
                 const archive = await zip.generateAsync(
@@ -707,7 +826,7 @@ window.ImageEditor = (() => {
             } else {
                 controls.setDownloadStatus('Preparing image…');
                 const entry = snapshots[0];
-                downloadBlob(await canvasToBlob(entry.canvas), entry.filename);
+                downloadBlob(await canvasToBlob(entry.canvas, format), entry.filename);
             }
             controls.setDownloadStatus('Download ready.');
         } catch (error) {
@@ -728,6 +847,16 @@ window.ImageEditor = (() => {
         handleFiles,
         processSelectedImage,
         downloadImages,
+        commitEdit,
+        clearHistory,
+        undo: () => stepHistory('past', 'future'),
+        redo: () => stepHistory('future', 'past'),
+        get canUndo() {
+            return Boolean(historyReady()?.past.length);
+        },
+        get canRedo() {
+            return Boolean(historyReady()?.future.length);
+        },
         get canDownload() {
             return Boolean(
                 cropper &&

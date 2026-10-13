@@ -214,34 +214,37 @@
         editor.cropper.rotateTo(editor.rotationAngle);
         syncRotationControls();
     }
-    document
-        .getElementById('rotateLeft')
-        .addEventListener('click', () =>
-            setRotation(editor.rotationAngle - 90),
-        );
-    document
-        .getElementById('rotateRight')
-        .addEventListener('click', () =>
-            setRotation(editor.rotationAngle + 90),
-        );
+    document.getElementById('rotateLeft').addEventListener('click', () => {
+        setRotation(editor.rotationAngle - 90);
+        editor.commitEdit();
+    });
+    document.getElementById('rotateRight').addEventListener('click', () => {
+        setRotation(editor.rotationAngle + 90);
+        editor.commitEdit();
+    });
     for (const id of ['rotationAngle', 'rotationSlider']) {
-        document.getElementById(id).addEventListener('input', (event) => {
+        const input = document.getElementById(id);
+        input.addEventListener('input', (event) => {
             const value = Number(event.target.value);
             if (event.target.value.trim() && value >= -180 && value <= 180)
                 setRotation(value);
         });
+        // Record one undo step when dragging or typing ends, not per input event.
+        input.addEventListener('change', editor.commitEdit);
     }
     document.getElementById('flipHorizontal').addEventListener('click', () => {
         if (!editor.cropper || !editor.cropper.ready) return;
         editor.horizontalScale *= -1;
         editor.cropper.scaleX(editor.horizontalScale);
         syncRotationControls();
+        editor.commitEdit();
     });
     document.getElementById('flipVertical').addEventListener('click', () => {
         if (!editor.cropper || !editor.cropper.ready) return;
         editor.verticalScale *= -1;
         editor.cropper.scaleY(editor.verticalScale);
         syncRotationControls();
+        editor.commitEdit();
     });
 
     function updateBackgroundColor(color) {
@@ -281,6 +284,7 @@
     // Handle background removal toggle
     removeBgCheckbox.addEventListener('change', function () {
         if (editor.selectedFile) {
+            editor.clearHistory();
             editor.processSelectedImage(editor.selectedFile, this.checked, false);
         }
     });
@@ -310,12 +314,15 @@
 
     widthInput.addEventListener('input', applyResolution);
     heightInput.addEventListener('input', applyResolution);
+    widthInput.addEventListener('change', editor.commitEdit);
+    heightInput.addEventListener('change', editor.commitEdit);
 
     // Reset functionality - resets image to original state
     document
         .getElementById('resetButton')
         .addEventListener('click', function () {
             if (editor.selectedFile && editor.cropper) {
+                editor.clearHistory();
                 editor.processSelectedImage(
                     editor.selectedFile,
                     removeBgCheckbox.checked,
@@ -350,6 +357,7 @@
                     Math.max(1, Math.round(width / ratio)),
                 );
             }
+            editor.commitEdit();
         });
 
     function selectBackground(color, activeButton) {
@@ -362,19 +370,18 @@
         updateBackgroundColor(color);
     }
 
-    transparentBgButton.addEventListener('click', () =>
-        selectBackground('transparent', 'transparentBg'),
-    );
-    document
-        .getElementById('whiteBg')
-        .addEventListener('click', () =>
-            selectBackground('#ffffff', 'whiteBg'),
-        );
-    document
-        .getElementById('blackBg')
-        .addEventListener('click', () =>
-            selectBackground('#000000', 'blackBg'),
-        );
+    transparentBgButton.addEventListener('click', () => {
+        selectBackground('transparent', 'transparentBg');
+        editor.commitEdit();
+    });
+    document.getElementById('whiteBg').addEventListener('click', () => {
+        selectBackground('#ffffff', 'whiteBg');
+        editor.commitEdit();
+    });
+    document.getElementById('blackBg').addEventListener('click', () => {
+        selectBackground('#000000', 'blackBg');
+        editor.commitEdit();
+    });
     document
         .getElementById('customBg')
         .addEventListener('click', () => bgColorInput.click());
@@ -391,7 +398,11 @@
         selectBackground(bgColorInput.value, 'customBg');
     }
     bgColorInput.addEventListener('input', applyCustomBackground);
-    bgColorInput.addEventListener('change', applyCustomBackground);
+    // The picker fires input while browsing colours; record one step when it closes.
+    bgColorInput.addEventListener('change', () => {
+        applyCustomBackground();
+        editor.commitEdit();
+    });
 
     function syncBackgroundControls() {
         const color = editor.selectedBackground;
@@ -431,6 +442,9 @@
         document.getElementById('downloadAll').disabled = !editor.canDownload;
         downloadTrigger.setAttribute('aria-busy', String(editor.exportBusy));
         if (!editor.canDownload) closeDownloadMenu();
+        // Undo availability changes at the same points as download availability.
+        document.getElementById('undoButton').disabled = !editor.canUndo;
+        document.getElementById('redoButton').disabled = !editor.canRedo;
     }
 
     function setDownloadStatus(message) {
@@ -439,26 +453,77 @@
         status.hidden = !message;
     }
 
+    const exportFormat = document.getElementById('exportFormat');
+    const exportQuality = document.getElementById('exportQuality');
+    let webpChecked = false;
+
+    function syncExportOptions() {
+        const lossy =
+            exportFormat.value === 'image/jpeg' ||
+            exportFormat.value === 'image/webp';
+        document.getElementById('exportQualityRow').hidden = !lossy;
+        document.getElementById('exportNote').hidden =
+            exportFormat.value !== 'image/jpeg';
+        document.getElementById('exportQualityValue').textContent =
+            `${exportQuality.value}%`;
+    }
+
+    // Some browsers (older Safari) cannot encode WebP and silently fall back
+    // to PNG, so test once with a 1×1 canvas and disable the option if needed.
+    function checkWebpSupport() {
+        if (webpChecked) return;
+        webpChecked = true;
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        if (canvas.toDataURL('image/webp').startsWith('data:image/webp')) return;
+        const option = document.getElementById('exportFormatWebp');
+        option.disabled = true;
+        option.textContent = 'WebP (not supported in this browser)';
+    }
+
+    function selectedExportFormat() {
+        if (exportFormat.value === 'image/jpeg' || exportFormat.value === 'image/webp')
+            return {
+                type: exportFormat.value,
+                quality: Number(exportQuality.value) / 100,
+            };
+        return { type: 'image/png' };
+    }
+
+    exportFormat.addEventListener('change', syncExportOptions);
+    exportQuality.addEventListener('input', syncExportOptions);
+
     downloadTrigger.addEventListener('click', () => {
         if (!editor.canDownload) return;
         downloadOpen = !downloadOpen;
         downloadMenu.hidden = !downloadOpen;
         downloadTrigger.setAttribute('aria-expanded', String(downloadOpen));
-        if (downloadOpen) document.getElementById('downloadCurrent').focus();
+        if (downloadOpen) {
+            checkWebpSupport();
+            document.getElementById('downloadCurrent').focus();
+        }
     });
     document.getElementById('downloadCurrent').addEventListener('click', () => {
         closeDownloadMenu(true);
-        editor.downloadImages(false);
+        editor.downloadImages(false, selectedExportFormat());
     });
     document.getElementById('downloadAll').addEventListener('click', () => {
         closeDownloadMenu(true);
-        editor.downloadImages(true);
+        editor.downloadImages(true, selectedExportFormat());
     });
+    const downloadActions = ['downloadCurrent', 'downloadAll'].map((id) =>
+        document.getElementById(id),
+    );
     downloadMenu.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
             event.preventDefault();
             closeDownloadMenu(true);
-        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        } else if (
+            (event.key === 'ArrowDown' || event.key === 'ArrowUp') &&
+            // The format select and quality slider need their own arrow keys.
+            downloadActions.includes(event.target)
+        ) {
             event.preventDefault();
             const target =
                 event.target === document.getElementById('downloadCurrent')
@@ -473,6 +538,21 @@
     });
     document.addEventListener('click', (event) => {
         if (!downloadControl.contains(event.target)) closeDownloadMenu();
+    });
+
+    document.getElementById('undoButton').addEventListener('click', editor.undo);
+    document.getElementById('redoButton').addEventListener('click', editor.redo);
+    document.addEventListener('keydown', (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        const key = event.key.toLowerCase();
+        const redo = (key === 'z' && event.shiftKey) || (key === 'y' && !event.shiftKey);
+        if (key !== 'z' && !redo) return;
+        // Number fields keep the browser's own undo for what is being typed.
+        if (event.target.matches?.('input[type="number"], input[type="text"], textarea'))
+            return;
+        event.preventDefault();
+        if (redo) editor.redo();
+        else editor.undo();
     });
 
     editor.attachControls({

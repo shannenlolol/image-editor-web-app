@@ -30,7 +30,7 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
-function editor() {
+function editor({ webpEncoding = true } = {}) {
     class Element extends EventTarget {
         constructor() {
             super();
@@ -109,10 +109,11 @@ function editor() {
             revoked.add(url);
         },
     };
+    const documentEvents = new EventTarget();
     const context = vm.createContext({
         document: {
             documentElement: { dataset: {} },
-            addEventListener() {},
+            addEventListener: (...args) => documentEvents.addEventListener(...args),
             getElementById: element,
             querySelector: (selector) => {
                 const knownSelectors = [
@@ -153,6 +154,11 @@ function editor() {
                             element.putPixels = imageData.data;
                         },
                     });
+                    // Browsers without an encoder return a PNG data URL instead.
+                    element.toDataURL = (type) =>
+                        type === 'image/webp' && webpEncoding
+                            ? 'data:image/webp;base64,'
+                            : 'data:image/png;base64,';
                     element.toBlob = (callback, type, quality) =>
                         exports.push(
                             Object.assign(callback, { canvas: element, type, quality }),
@@ -310,7 +316,16 @@ function editor() {
         task.resolve();
         await flush();
     }
+    // Node's Event has no clipboardData, so attach a minimal one.
+    async function paste(files) {
+        const event = new Event('paste', { cancelable: true });
+        event.clipboardData = { files };
+        documentEvents.dispatchEvent(event);
+        await flush();
+        return event.defaultPrevented;
+    }
     return {
+        paste,
         leavingWouldPrompt: () => {
             const event = new Event('beforeunload', { cancelable: true });
             // BeforeUnloadEvent has a writable returnValue, unlike Node's Event.
@@ -319,7 +334,8 @@ function editor() {
             return event.defaultPrevented;
         },
         upload: (files) => context.window.ImageEditor.handleFiles(files),
-        download: (all) => context.window.ImageEditor.downloadImages(all),
+        download: (all, format) =>
+            context.window.ImageEditor.downloadImages(all, format),
         element,
         select,
         toggle,
@@ -335,6 +351,17 @@ function editor() {
         bitmaps,
         downloads,
         resizeCanvas: () => resizeCanvas(),
+        // Node's EventTarget does not bubble, so present the key as coming from target.
+        keydown(key, modifiers = {}, target = context.document.body) {
+            const event = Object.assign(
+                new Event('keydown', { cancelable: true }),
+                { key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false },
+                modifiers,
+            );
+            Object.defineProperty(event, 'target', { value: target });
+            documentEvents.dispatchEvent(event);
+            return event.defaultPrevented;
+        },
         visibleImage: () => urls.get(element('image').src),
         filename: () => context.window.ImageEditor.selectedFileName,
         cropper: () => context.window.ImageEditor.cropper,
@@ -1503,4 +1530,357 @@ test('switching images while a mask is applied discards the stale cut-out', asyn
     assert.equal(e.visibleImage().name, 'B.png');
     assert.equal(e.filename(), 'B.png');
     assert.equal(e.croppers.length, 1);
+});
+
+test('toggling removal on a large photo keeps the crop exactly in place', async () => {
+    const e = editor();
+    const photo = { name: 'photo.jpg', type: 'image/jpeg', width: 4000, height: 3000 };
+    await e.select(photo, false);
+    await e.decode();
+    e.cropper().data = { x: 1000, y: 600, width: 2000, height: 1500 };
+    await e.toggle(true);
+    e.exports.at(-1)({ name: 'shrunk' });
+    await flush();
+    await e.respond(e.requests[0], { width: 2048, height: 1536 });
+    // The mask is applied to the original, so the cut-out stays at full size.
+    await finishCutout(e, { name: 'cutout', width: 4000, height: 3000 });
+    const data = e.cropper().getData();
+    assert.deepEqual([data.x, data.y, data.width, data.height], [1000, 600, 2000, 1500]);
+});
+
+test('a reprocessed image at a different size keeps the crop on the same area', async () => {
+    const e = editor();
+    // Undecodable files use the server cut-out; a smaller one stands in for any size change.
+    const scan = { name: 'scan.tiff', type: 'image/tiff', width: 4000, height: 3000, undecodable: true };
+    await e.select(scan, false);
+    await e.decode();
+    e.cropper().data = { x: 1000, y: 600, width: 2000, height: 1500 };
+    await e.toggle(true);
+    await e.respond(e.requests[0], { name: 'cutout', width: 2048, height: 1536 });
+    await e.decode();
+    const shrunk = e.cropper().getData();
+    assert.deepEqual(
+        [shrunk.x, shrunk.y, shrunk.width, shrunk.height],
+        [512, 307.2, 1024, 768],
+    );
+    // Switching back restores the crop in the full-size image's pixels.
+    await e.toggle(false);
+    await e.decode();
+    const full = e.cropper().getData();
+    assert.deepEqual([full.x, full.y, full.width, full.height], [1000, 600, 2000, 1500]);
+});
+
+test('reprocessing at the same size leaves the crop untouched', async () => {
+    const e = editor();
+    const file = { name: 'small.png', width: 800, height: 600, undecodable: true };
+    await e.select(file, false);
+    await e.decode();
+    e.cropper().data = { x: 13, y: 7, width: 333, height: 250 };
+    await e.toggle(true);
+    await e.respond(e.requests[0], { name: 'cutout', width: 800, height: 600 });
+    await e.decode();
+    const data = e.cropper().getData();
+    assert.deepEqual([data.x, data.y, data.width, data.height], [13, 7, 333, 250]);
+});
+
+async function editedImage(name = 'A.png') {
+    const e = editor();
+    await e.select({ name }, false);
+    await e.decode();
+    return e;
+}
+
+function dragCrop(e, data) {
+    e.cropper().data = { ...e.cropper().data, ...data };
+    e.cropper().options.cropend();
+}
+
+test('undo and redo step through crop, transform and background edits', async () => {
+    const e = await editedImage();
+    const undo = e.element('undoButton'),
+        redo = e.element('redoButton');
+    assert.equal(undo.disabled, true);
+    assert.equal(redo.disabled, true);
+    const initial = e.cropper().getData();
+    dragCrop(e, { x: 40, width: 200 });
+    e.element('rotateRight').click();
+    e.element('flipHorizontal').click();
+    e.element('blackBg').click();
+    assert.equal(undo.disabled, false);
+
+    undo.click();
+    assert.equal(e.element('blackBg')['aria-pressed'], 'false');
+    assert.equal(e.element('transparentBg')['aria-pressed'], 'true');
+    assert.equal(e.cropper().horizontalScale, -1);
+    undo.click();
+    assert.equal(e.cropper().horizontalScale, 1);
+    assert.equal(e.element('flipHorizontal')['aria-pressed'], 'false');
+    undo.click();
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.element('rotationAngle').value, '0');
+    undo.click();
+    assert.deepEqual(e.cropper().getData(), initial);
+    assert.equal(undo.disabled, true);
+    assert.equal(redo.disabled, false);
+
+    redo.click();
+    assert.equal(e.cropper().getData().x, 40);
+    assert.equal(e.cropper().getData().width, 200);
+    redo.click();
+    redo.click();
+    redo.click();
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.cropper().horizontalScale, -1);
+    assert.equal(e.element('blackBg')['aria-pressed'], 'true');
+    assert.equal(redo.disabled, true);
+    // Undo works on the live cropper; nothing is reprocessed or rebuilt.
+    assert.equal(e.croppers.length, 1);
+    assert.equal(e.decodes.length, 1);
+});
+
+test('undo restores output size and aspect ratio together', async () => {
+    const e = await editedImage();
+    e.element('widthInput').value = '300';
+    e.element('widthInput').dispatchEvent(new Event('input'));
+    // No change event yet: undo must still record the typed width first.
+    e.element('undoButton').click();
+    assert.equal(e.element('widthInput').value, '640');
+    assert.equal(e.element('aspectRatioPreset').value, 'original');
+    assert.equal(e.cropper().options.aspectRatio, 640 / 480);
+    e.element('redoButton').click();
+    assert.equal(e.element('widthInput').value, '300');
+    assert.equal(e.element('aspectRatioPreset').value, 'custom');
+    assert.equal(e.cropper().options.aspectRatio, 300 / 480);
+});
+
+test('continuous controls record one step when they settle', async () => {
+    const e = await editedImage();
+    const slider = e.element('rotationSlider');
+    for (const value of ['10', '20', '30']) {
+        slider.value = value;
+        slider.dispatchEvent(new Event('input'));
+    }
+    slider.dispatchEvent(new Event('change'));
+    const colour = e.element('bgColor');
+    for (const value of ['#111111', '#222222']) {
+        colour.value = value;
+        colour.dispatchEvent(new Event('input'));
+    }
+    colour.dispatchEvent(new Event('change'));
+    e.element('undoButton').click();
+    assert.equal(e.element('transparentBg')['aria-pressed'], 'true');
+    assert.equal(e.cropper().rotation, 30);
+    e.element('undoButton').click();
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.element('undoButton').disabled, true);
+});
+
+test('a new edit after undo discards the redo steps, and no-op edits add none', async () => {
+    const e = await editedImage();
+    e.element('flipVertical').click();
+    e.element('undoButton').click();
+    assert.equal(e.element('redoButton').disabled, false);
+    e.element('transparentBg').click();
+    assert.equal(e.element('redoButton').disabled, false);
+    e.element('rotateLeft').click();
+    assert.equal(e.element('redoButton').disabled, true);
+    e.element('undoButton').click();
+    assert.equal(e.element('undoButton').disabled, true);
+});
+
+test('history is kept per image across switching', async () => {
+    const e = editor();
+    const a = { name: 'A.png' };
+    await e.select(a, false);
+    await e.decode();
+    e.element('rotateRight').click();
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.element('undoButton').disabled, true);
+    e.element('batchImages').children[0].click();
+    assert.equal(e.element('undoButton').disabled, true);
+    await e.decode();
+    assert.equal(e.element('undoButton').disabled, false);
+    e.element('undoButton').click();
+    assert.equal(e.cropper().rotation, 0);
+});
+
+test('background removal and reset start a fresh history', async () => {
+    for (const action of ['toggle', 'reset']) {
+        const e = await editedImage();
+        e.element('rotateRight').click();
+        if (action === 'toggle') await e.toggle(true);
+        else e.element('resetButton').click();
+        await flush();
+        assert.equal(e.element('undoButton').disabled, true, action);
+        if (action === 'toggle') await e.respond(e.requests[0], { name: 'cutout' });
+        await e.decode();
+        assert.equal(e.element('undoButton').disabled, true, action);
+        e.element('flipVertical').click();
+        e.element('undoButton').click();
+        assert.equal(e.element('undoButton').disabled, true, action);
+    }
+});
+
+test('keyboard shortcuts undo and redo outside text fields', async () => {
+    const e = await editedImage();
+    e.element('rotateRight').click();
+    assert.equal(e.keydown('z', { metaKey: true }), true);
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.keydown('z', { ctrlKey: true, shiftKey: true }), true);
+    assert.equal(e.cropper().rotation, 90);
+    e.keydown('z', { ctrlKey: true });
+    assert.equal(e.keydown('y', { ctrlKey: true }), true);
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.keydown('z'), false);
+    assert.equal(e.keydown('z', { ctrlKey: true, altKey: true }), false);
+    const numberField = { matches: (selector) => selector.includes('input[type="number"]') };
+    assert.equal(e.keydown('z', { ctrlKey: true }, numberField), false);
+    assert.equal(e.cropper().rotation, 90);
+});
+
+test('history keeps the most recent 50 steps', async () => {
+    const e = await editedImage();
+    for (let step = 0; step < 60; step++) e.element('flipVertical').click();
+    let undone = 0;
+    while (!e.element('undoButton').disabled) {
+        e.element('undoButton').click();
+        undone++;
+    }
+    assert.equal(undone, 50);
+});
+
+function chooseExport(e, format, quality) {
+    e.element('exportFormat').value = format;
+    e.element('exportFormat').dispatchEvent(new Event('change'));
+    if (quality !== undefined) {
+        e.element('exportQuality').value = String(quality);
+        e.element('exportQuality').dispatchEvent(new Event('input'));
+    }
+}
+
+test('JPEG export uses the chosen quality and a white backdrop for transparency', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    chooseExport(e, 'image/jpeg', 70);
+    assert.equal(e.element('exportQualityRow').hidden, false);
+    assert.equal(e.element('exportNote').hidden, false);
+    assert.equal(e.element('exportQualityValue').textContent, '70%');
+    e.element('downloadMenuButton').click();
+    e.element('downloadCurrent').click();
+    const toBlob = e.exports.at(-1);
+    assert.equal(toBlob.type, 'image/jpeg');
+    assert.equal(toBlob.quality, 0.7);
+    // The edited canvas is drawn onto a fresh, white-filled canvas before encoding.
+    const edited = toBlob.canvas.renderedFrom;
+    assert.equal(e.canvases.includes(edited), true);
+    assert.equal(toBlob.canvas.width, edited.width);
+    assert.equal(toBlob.canvas.height, edited.height);
+    toBlob(new Blob(['jpeg'], { type: 'image/jpeg' }));
+    await flush();
+    assert.equal(e.downloads[0].filename, 'edited_A.jpg');
+});
+
+test('WebP export keeps transparency and PNG ignores the quality setting', async () => {
+    for (const [format, filename, quality] of [
+        ['image/webp', 'edited_A.webp', 0.55],
+        ['image/png', 'edited_A.png', undefined],
+    ]) {
+        const e = editor();
+        await e.select({ name: 'A.png' }, false);
+        await e.decode();
+        chooseExport(e, format, 55);
+        assert.equal(e.element('exportQualityRow').hidden, format === 'image/png');
+        assert.equal(e.element('exportNote').hidden, true);
+        e.element('downloadMenuButton').click();
+        e.element('downloadCurrent').click();
+        const toBlob = e.exports.at(-1);
+        assert.equal(toBlob.type, format);
+        assert.equal(toBlob.quality, quality);
+        // The edited canvas is encoded directly, not copied onto a backdrop.
+        assert.equal(e.canvases.includes(toBlob.canvas.renderedFrom), false);
+        toBlob(new Blob(['image'], { type: format }));
+        await flush();
+        assert.equal(e.downloads[0].filename, filename);
+    }
+});
+
+test('ZIP export applies the format to edited images and keeps untouched originals', async () => {
+    const e = editor();
+    e.element('removeBg').checked = false;
+    e.upload([imageFile('edited.png'), imageFile('original.png', 'untouched image')]);
+    await e.decode();
+    const pending = e.download(true, { type: 'image/webp', quality: 0.8 });
+    assert.equal(e.exports[0].type, 'image/webp');
+    assert.equal(e.exports[0].quality, 0.8);
+    await encodeExport(e, 0);
+    await pending;
+    const zip = await JSZip.loadAsync(await e.downloads[0].blob.arrayBuffer());
+    assert.deepEqual(Object.keys(zip.files), ['edited_edited.webp', 'original.png']);
+});
+
+test('unknown export formats fall back to PNG', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.download(false, { type: 'image/gif' });
+    await flush();
+    assert.equal(e.exports.at(-1).type, 'image/png');
+    e.exports.at(-1)(new Blob(['png'], { type: 'image/png' }));
+    await flush();
+    assert.equal(e.downloads[0].filename, 'edited_A.png');
+});
+
+test('WebP is disabled when the browser cannot encode it', async () => {
+    for (const webpEncoding of [true, false]) {
+        const e = editor({ webpEncoding });
+        await e.select({ name: 'A.png' }, false);
+        await e.decode();
+        e.element('downloadMenuButton').click();
+        const option = e.element('exportFormatWebp');
+        assert.equal(Boolean(option.disabled), !webpEncoding);
+    }
+});
+
+test('arrow keys move between download actions but not inside the export options', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    e.element('downloadMenuButton').click();
+    const press = (target) => {
+        const event = new Event('keydown', { cancelable: true });
+        event.key = 'ArrowDown';
+        // Node's EventTarget does not bubble, so present the key as coming from target.
+        Object.defineProperty(event, 'target', { value: target });
+        e.element('downloadMenu').dispatchEvent(event);
+        return event.defaultPrevented;
+    };
+    assert.equal(press(e.element('exportQuality')), false);
+    assert.equal(press(e.element('exportFormat')), false);
+    assert.equal(press(e.element('downloadCurrent')), true);
+    assert.equal(e.element('downloadAll').focused, true);
+});
+
+test('pasting images adds them like an upload and selects the first', async () => {
+    const e = editor();
+    const screenshot = { name: 'image.png', type: 'image/png' };
+    const photo = { name: 'photo.jpg', type: 'image/jpeg' };
+    e.element('removeBg').checked = false;
+    assert.equal(
+        await e.paste([screenshot, { name: 'notes.txt', type: 'text/plain' }, photo]),
+        true,
+    );
+    assert.equal(e.element('batchImages').children.length, 2);
+    assert.equal(e.filename(), 'image.png');
+    await e.decode();
+    assert.equal(e.visibleImage(), screenshot);
+});
+
+test('pasting text or nothing is left to the browser', async () => {
+    const e = editor();
+    assert.equal(await e.paste([]), false);
+    assert.equal(await e.paste([{ name: 'notes.txt', type: 'text/plain' }]), false);
+    assert.equal(e.element('batchImages').children.length, 0);
+    assert.equal(e.decodes.length, 0);
 });

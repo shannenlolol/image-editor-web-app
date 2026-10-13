@@ -688,8 +688,15 @@ body {
   background: var(--selected);
   color: var(--selected-text);
 }
-.reset-tool {
+.undo-tool {
   margin-top: auto;
+}
+.tool-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tool-button:disabled:hover {
+  background: transparent;
 }
 .reset-tool:hover {
   color: var(--danger-text);
@@ -886,7 +893,7 @@ input:focus-visible {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
-  .reset-tool {
+  .undo-tool {
     margin-top: 0;
     margin-left: auto;
   }
@@ -1253,6 +1260,56 @@ input:focus-visible {
 .download-menu button:hover,
 .download-menu button:focus-visible {
   background: var(--hover);
+}
+.export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text);
+}
+.export-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+.export-row[hidden] {
+  display: none;
+}
+.export-row label {
+  flex: 0 0 52px;
+}
+#exportFormat {
+  flex: 1;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+#exportQuality {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: #2b79dc;
+  cursor: pointer;
+}
+#exportQualityValue {
+  flex: 0 0 36px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.export-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 .download-btn:disabled {
   opacity: 0.5;
