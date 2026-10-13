@@ -1,6 +1,6 @@
 from flask import Flask, request, send_file, render_template, jsonify
 from rembg import remove, new_session
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from io import BytesIO
 from collections import deque
 import os
@@ -89,6 +89,18 @@ def healthz():
 
 @app.route('/remove-bg', methods=['POST'])
 def remove_bg():
+    return run_removal(only_mask=False)
+
+
+# Returns just the greyscale mask. The page uploads a downscaled copy of large
+# photos and applies the mask to the original in the browser, so the cut-out
+# keeps full resolution. /remove-bg stays for images the browser cannot decode.
+@app.route('/remove-bg/mask', methods=['POST'])
+def remove_bg_mask():
+    return run_removal(only_mask=True)
+
+
+def run_removal(only_mask):
     if rate_limited(client_ip()):
         return jsonify({'message': 'Too many requests. Please wait a minute and try again.'}), 429
     if 'file' not in request.files:
@@ -112,7 +124,9 @@ def remove_bg():
             # verify() invalidates the decoder. Reopen and fully decode before inference.
             with Image.open(BytesIO(data)) as image:
                 image.load()
-                input_image = image.convert('RGBA')
+                # Browsers draw photos upright using EXIF orientation, so the mask
+                # must be computed on the upright image to line up in the page.
+                input_image = ImageOps.exif_transpose(image).convert('RGBA')
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         return jsonify({'message': 'Image is too large. Maximum decoded size is 25 megapixels.'}), 413
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, EOFError):
@@ -122,9 +136,11 @@ def remove_bg():
         if not removal_slots.acquire(blocking=False):
             return jsonify({'message': 'Busy, please try again in a few seconds.'}), 503
         try:
-            output_image = remove(input_image, session=bg_session)
+            output_image = remove(input_image, session=bg_session, only_mask=only_mask)
         finally:
             removal_slots.release()
+        if only_mask:
+            output_image = output_image.convert('L')
         img_byte_arr = BytesIO()
         output_image.save(img_byte_arr, format='PNG')
         img_byte_arr.seek(0)

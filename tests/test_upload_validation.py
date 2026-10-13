@@ -36,6 +36,8 @@ def oversized_png(width, height):
 
 
 class UploadTestCase(unittest.TestCase):
+    endpoint = '/remove-bg'
+
     def setUp(self):
         self.client = backend.app.test_client()
         self.inference = patch.object(backend, 'remove', side_effect=lambda image, **kwargs: image)
@@ -45,7 +47,7 @@ class UploadTestCase(unittest.TestCase):
         self.addCleanup(backend.recent_removals.clear)
 
     def upload(self, data, filename='image.png', content_type='image/png', **environ):
-        builder = EnvironBuilder(path='/remove-bg', method='POST', data={
+        builder = EnvironBuilder(path=self.endpoint, method='POST', data={
             'file': (BytesIO(data), filename, content_type),
         }, **environ)
         environ = builder.get_environ()
@@ -67,7 +69,7 @@ class UploadTestCase(unittest.TestCase):
 
 class UploadValidationTests(UploadTestCase):
     def test_missing_file(self):
-        self.assert_rejected(self.client.post('/remove-bg'), 400, 'No file')
+        self.assert_rejected(self.client.post(self.endpoint), 400, 'No file')
 
     def test_missing_filename(self):
         self.assert_rejected(self.upload(image_bytes(), ''), 400, 'No selected file')
@@ -126,7 +128,52 @@ class UploadValidationTests(UploadTestCase):
         self.remove.assert_called_once()
 
 
+class MaskUploadValidationTests(UploadValidationTests):
+    """The mask endpoint shares every upload check with /remove-bg."""
+    endpoint = '/remove-bg/mask'
+
+    def test_supported_formats_are_decoded_regardless_of_filename_and_mime(self):
+        for image_format in sorted(backend.SUPPORTED_IMAGE_FORMATS):
+            with self.subTest(image_format=image_format):
+                self.remove.reset_mock()
+                response = self.upload(image_bytes(image_format), 'wrong.txt', 'text/plain')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.mimetype, 'image/png')
+                self.remove.assert_called_once()
+                self.assertIs(self.remove.call_args.kwargs['only_mask'], True)
+                with Image.open(BytesIO(response.data)) as output:
+                    self.assertEqual(output.size, (8, 6))
+                    self.assertEqual(output.mode, 'L')
+
+
+class OrientationTests(UploadTestCase):
+    def rotated_jpeg(self):
+        # Stored 8×6 landscape, tagged "rotate 90° clockwise to display" (orientation 6).
+        stream = BytesIO()
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        Image.new('RGB', (8, 6), 'red').save(stream, format='JPEG', exif=exif)
+        return stream.getvalue()
+
+    def test_both_endpoints_process_the_upright_image(self):
+        for endpoint in ('/remove-bg', '/remove-bg/mask'):
+            with self.subTest(endpoint=endpoint):
+                self.endpoint = endpoint
+                self.remove.reset_mock()
+                response = self.upload(self.rotated_jpeg(), 'photo.jpg', 'image/jpeg')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.remove.call_args.args[0].size, (6, 8))
+                with Image.open(BytesIO(response.data)) as output:
+                    self.assertEqual(output.size, (6, 8))
+
+
 class LoadProtectionTests(UploadTestCase):
+    def test_endpoints_share_one_rate_limit(self):
+        with patch.dict(backend.app.config, REMOVAL_RATE_LIMIT=1):
+            self.assertEqual(self.upload(image_bytes()).status_code, 200)
+            self.endpoint = '/remove-bg/mask'
+            self.assertEqual(self.upload(image_bytes()).status_code, 429)
+
     def test_rate_limit_per_client(self):
         with patch.dict(backend.app.config, REMOVAL_RATE_LIMIT=2):
             for _ in range(2):

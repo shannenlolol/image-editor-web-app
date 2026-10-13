@@ -92,7 +92,8 @@ function editor({ webpEncoding = true } = {}) {
         croppers = [],
         exports = [],
         alerts = [],
-        canvases = [];
+        canvases = [],
+        bitmaps = [];
     const urls = new Map(),
         revoked = new Set();
     const downloads = [];
@@ -133,10 +134,24 @@ function editor({ webpEncoding = true } = {}) {
                         });
                 if (tag === 'canvas') {
                     canvases.push(element);
+                    // Pixel reads return the last drawn source's `pixels`, so tests
+                    // can check mask compositing on tiny images.
+                    element.draws = [];
                     element.getContext = () => ({
                         fillRect() {},
-                        drawImage(source) {
+                        clearRect() {},
+                        drawImage(source, ...position) {
                             element.renderedFrom = source;
+                            element.draws.push({ source, position });
+                        },
+                        getImageData: (x, y, width, height) => ({
+                            data: Uint8ClampedArray.from(
+                                element.renderedFrom.pixels ||
+                                    new Uint8ClampedArray(width * height * 4),
+                            ),
+                        }),
+                        putImageData(imageData) {
+                            element.putPixels = imageData.data;
                         },
                     });
                     // Browsers without an encoder return a PNG data URL instead.
@@ -163,16 +178,21 @@ function editor({ webpEncoding = true } = {}) {
                 return task.promise;
             }
         },
-        // Upload shrinking decodes here; Image.decode is reserved for the editor preview.
+        // Upload preparation and mask compositing decode here; Image.decode is
+        // reserved for the editor preview. Files without dimensions stand in for
+        // formats the browser cannot decode, which use the server's cut-out.
         createImageBitmap: async (file) => {
-            if (file.undecodable) throw new Error('InvalidStateError');
-            return {
-                width: file.width || 640,
-                height: file.height || 480,
+            if (!file.width || file.undecodable) throw new Error('InvalidStateError');
+            const bitmap = {
+                width: file.width,
+                height: file.height,
+                pixels: file.pixels,
                 close() {
                     this.closed = true;
                 },
             };
+            bitmaps.push(bitmap);
+            return bitmap;
         },
         ResizeObserver: class {
             constructor(callback) {
@@ -328,6 +348,7 @@ function editor({ webpEncoding = true } = {}) {
         alerts,
         revoked,
         canvases,
+        bitmaps,
         downloads,
         resizeCanvas: () => resizeCanvas(),
         // Node's EventTarget does not bubble, so present the key as coming from target.
@@ -924,13 +945,15 @@ test('background reprocessing preserves custom dimensions and reset restores nat
     e.element('widthInput').dispatchEvent(new Event('input'));
     await e.toggle(true);
     await e.respond(e.requests[0], file);
-    await e.decode();
+    // Decodable images get a mask back, composited onto the original in the browser.
+    assert.equal(e.requests[0].url, '/remove-bg/mask');
+    await finishCutout(e, file);
     assert.equal(e.element('widthInput').value, '700');
     assert.equal(e.cropper().options.aspectRatio, 700 / 1151);
     e.element('resetButton').click();
     await flush();
     await e.respond(e.requests[1], file);
-    await e.decode();
+    await finishCutout(e, file);
     assert.equal(e.element('widthInput').value, '1151');
     assert.equal(e.element('heightInput').value, '1151');
     assert.equal(e.element('aspectRatioPreset').value, 'original');
@@ -1209,6 +1232,13 @@ const JSZip = require('../static/vendor/jszip.min.js');
 const imageFile = (name, contents = 'original bytes') =>
     Object.assign(new Blob([contents], { type: 'image/png' }), { name });
 
+// Resolve the canvas encode at the end of mask compositing, then the preview decode.
+async function finishCutout(e, result) {
+    e.exports.at(-1)(result);
+    await flush();
+    await e.decode();
+}
+
 async function encodeExport(e, index) {
     const { canvas } = e.exports[index];
     const payload = JSON.stringify({
@@ -1423,14 +1453,109 @@ test('switching images while a photo is downscaling skips its upload', async () 
     assert.equal(e.filename(), 'next.png');
 });
 
-test('toggling removal on a downscaled photo keeps the crop on the same area', async () => {
+test('the mask becomes the alpha channel of the full-resolution original', async () => {
     const e = editor();
-    await e.select({ name: 'photo.jpg', type: 'image/jpeg', width: 4000, height: 3000 }, false);
+    // Two pixels: one opaque, one already half transparent in the original.
+    const file = {
+        name: 'pair.png',
+        type: 'image/png',
+        width: 2,
+        height: 1,
+        pixels: [10, 20, 30, 255, 40, 50, 60, 128],
+    };
+    await e.select(file);
+    const request = e.requests[0];
+    assert.equal(request.url, '/remove-bg/mask');
+    assert.equal(request.options.body.entries.get('file').value, file);
+    await e.respond(request, { width: 2, height: 1, pixels: [255, 255, 255, 255, 64, 64, 64, 255] });
+    const encode = e.exports.at(-1);
+    const canvas = encode.canvas;
+    assert.deepEqual([canvas.width, canvas.height], [2, 1]);
+    assert.deepEqual([...canvas.putPixels], [10, 20, 30, 255, 40, 50, 60, 32]);
+    assert.equal(e.bitmaps.every((bitmap) => bitmap.closed), true);
+    const cutout = { name: 'full-resolution cutout' };
+    await finishCutout(e, cutout);
+    assert.equal(e.visibleImage(), cutout);
+});
+
+test('large photos upload a small copy but keep the original resolution', async () => {
+    const e = editor();
+    const file = { name: 'wide.jpg', type: 'image/jpeg', width: 3000, height: 10 };
+    await e.select(file);
+    const shrunk = { name: 'shrunk' };
+    e.exports.at(-1)(shrunk);
+    await flush();
+    assert.equal(e.requests[0].options.body.entries.get('file').value, shrunk);
+    await e.respond(e.requests[0], { width: 2048, height: 7 });
+    const canvas = e.exports.at(-1).canvas;
+    assert.deepEqual([canvas.width, canvas.height], [3000, 10]);
+    const [maskDraw, photoDraw] = canvas.draws;
+    assert.equal(maskDraw.source.width, 2048);
+    assert.deepEqual(maskDraw.position, [0, 0, 3000, 10]);
+    assert.equal(photoDraw.source.width, 3000);
+});
+
+test('images the browser cannot decode use the server cut-out unchanged', async () => {
+    const e = editor();
+    const file = { name: 'scan.tiff', type: 'image/tiff', width: 800, height: 600, undecodable: true };
+    await e.select(file);
+    assert.equal(e.requests[0].url, '/remove-bg');
+    const cutout = { name: 'server cutout', width: 800, height: 600 };
+    const exportsBefore = e.exports.length;
+    await e.respond(e.requests[0], cutout);
+    await e.decode();
+    assert.equal(e.exports.length, exportsBefore);
+    assert.equal(e.visibleImage(), cutout);
+});
+
+test('a mask that cannot be applied reports the failure', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 });
+    await e.respond(e.requests[0], { name: 'not an image' });
+    assert.deepEqual(e.alerts, [
+        'Could not apply the background removal. Upload the image again to retry.',
+    ]);
+    assert.equal(e.bitmaps.every((bitmap) => bitmap.closed), true);
+});
+
+test('switching images while a mask is applied discards the stale cut-out', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 });
+    await e.respond(e.requests[0], { width: 4, height: 4 });
+    const staleEncode = e.exports.at(-1);
+    await e.select({ name: 'B.png' }, false);
+    staleEncode({ name: 'stale cutout' });
+    await flush();
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'B.png');
+    assert.equal(e.filename(), 'B.png');
+    assert.equal(e.croppers.length, 1);
+});
+
+test('toggling removal on a large photo keeps the crop exactly in place', async () => {
+    const e = editor();
+    const photo = { name: 'photo.jpg', type: 'image/jpeg', width: 4000, height: 3000 };
+    await e.select(photo, false);
     await e.decode();
     e.cropper().data = { x: 1000, y: 600, width: 2000, height: 1500 };
     await e.toggle(true);
     e.exports.at(-1)({ name: 'shrunk' });
     await flush();
+    await e.respond(e.requests[0], { width: 2048, height: 1536 });
+    // The mask is applied to the original, so the cut-out stays at full size.
+    await finishCutout(e, { name: 'cutout', width: 4000, height: 3000 });
+    const data = e.cropper().getData();
+    assert.deepEqual([data.x, data.y, data.width, data.height], [1000, 600, 2000, 1500]);
+});
+
+test('a reprocessed image at a different size keeps the crop on the same area', async () => {
+    const e = editor();
+    // Undecodable files use the server cut-out; a smaller one stands in for any size change.
+    const scan = { name: 'scan.tiff', type: 'image/tiff', width: 4000, height: 3000, undecodable: true };
+    await e.select(scan, false);
+    await e.decode();
+    e.cropper().data = { x: 1000, y: 600, width: 2000, height: 1500 };
+    await e.toggle(true);
     await e.respond(e.requests[0], { name: 'cutout', width: 2048, height: 1536 });
     await e.decode();
     const shrunk = e.cropper().getData();
@@ -1438,19 +1563,17 @@ test('toggling removal on a downscaled photo keeps the crop on the same area', a
         [shrunk.x, shrunk.y, shrunk.width, shrunk.height],
         [512, 307.2, 1024, 768],
     );
-    // Switching back restores the crop in the full-size photo's pixels.
+    // Switching back restores the crop in the full-size image's pixels.
     await e.toggle(false);
     await e.decode();
     const full = e.cropper().getData();
-    assert.deepEqual(
-        [full.x, full.y, full.width, full.height],
-        [1000, 600, 2000, 1500],
-    );
+    assert.deepEqual([full.x, full.y, full.width, full.height], [1000, 600, 2000, 1500]);
 });
 
 test('reprocessing at the same size leaves the crop untouched', async () => {
     const e = editor();
-    await e.select({ name: 'small.png', width: 800, height: 600 }, false);
+    const file = { name: 'small.png', width: 800, height: 600, undecodable: true };
+    await e.select(file, false);
     await e.decode();
     e.cropper().data = { x: 13, y: 7, width: 333, height: 250 };
     await e.toggle(true);
