@@ -439,26 +439,77 @@
         status.hidden = !message;
     }
 
+    const exportFormat = document.getElementById('exportFormat');
+    const exportQuality = document.getElementById('exportQuality');
+    let webpChecked = false;
+
+    function syncExportOptions() {
+        const lossy =
+            exportFormat.value === 'image/jpeg' ||
+            exportFormat.value === 'image/webp';
+        document.getElementById('exportQualityRow').hidden = !lossy;
+        document.getElementById('exportNote').hidden =
+            exportFormat.value !== 'image/jpeg';
+        document.getElementById('exportQualityValue').textContent =
+            `${exportQuality.value}%`;
+    }
+
+    // Some browsers (older Safari) cannot encode WebP and silently fall back
+    // to PNG, so test once with a 1×1 canvas and disable the option if needed.
+    function checkWebpSupport() {
+        if (webpChecked) return;
+        webpChecked = true;
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        if (canvas.toDataURL('image/webp').startsWith('data:image/webp')) return;
+        const option = document.getElementById('exportFormatWebp');
+        option.disabled = true;
+        option.textContent = 'WebP (not supported in this browser)';
+    }
+
+    function selectedExportFormat() {
+        if (exportFormat.value === 'image/jpeg' || exportFormat.value === 'image/webp')
+            return {
+                type: exportFormat.value,
+                quality: Number(exportQuality.value) / 100,
+            };
+        return { type: 'image/png' };
+    }
+
+    exportFormat.addEventListener('change', syncExportOptions);
+    exportQuality.addEventListener('input', syncExportOptions);
+
     downloadTrigger.addEventListener('click', () => {
         if (!editor.canDownload) return;
         downloadOpen = !downloadOpen;
         downloadMenu.hidden = !downloadOpen;
         downloadTrigger.setAttribute('aria-expanded', String(downloadOpen));
-        if (downloadOpen) document.getElementById('downloadCurrent').focus();
+        if (downloadOpen) {
+            checkWebpSupport();
+            document.getElementById('downloadCurrent').focus();
+        }
     });
     document.getElementById('downloadCurrent').addEventListener('click', () => {
         closeDownloadMenu(true);
-        editor.downloadImages(false);
+        editor.downloadImages(false, selectedExportFormat());
     });
     document.getElementById('downloadAll').addEventListener('click', () => {
         closeDownloadMenu(true);
-        editor.downloadImages(true);
+        editor.downloadImages(true, selectedExportFormat());
     });
+    const downloadActions = ['downloadCurrent', 'downloadAll'].map((id) =>
+        document.getElementById(id),
+    );
     downloadMenu.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
             event.preventDefault();
             closeDownloadMenu(true);
-        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        } else if (
+            (event.key === 'ArrowDown' || event.key === 'ArrowUp') &&
+            // The format select and quality slider need their own arrow keys.
+            downloadActions.includes(event.target)
+        ) {
             event.preventDefault();
             const target =
                 event.target === document.getElementById('downloadCurrent')
