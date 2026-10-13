@@ -44,6 +44,24 @@
                         Download <span class="download-caret" aria-hidden="true">▾</span>
                     </button>
                     <div id="downloadMenu" class="download-menu" hidden>
+                        <div class="export-options">
+                            <div class="export-row">
+                                <label for="exportFormat">Format</label>
+                                <select id="exportFormat">
+                                    <option value="image/png">PNG</option>
+                                    <option value="image/jpeg">JPEG</option>
+                                    <option value="image/webp" id="exportFormatWebp">WebP</option>
+                                </select>
+                            </div>
+                            <div class="export-row" id="exportQualityRow" hidden>
+                                <label for="exportQuality">Quality</label>
+                                <input type="range" id="exportQuality" min="10" max="100" step="5" value="90" />
+                                <output id="exportQualityValue" for="exportQuality">90%</output>
+                            </div>
+                            <p class="export-note" id="exportNote" hidden>
+                                JPEG has no transparency, so transparent areas become white.
+                            </p>
+                        </div>
                         <button type="button" id="downloadCurrent">
                             Download current image
                         </button>
@@ -259,7 +277,7 @@
                     <div class="upload-placeholder" id="uploadPlaceholder">
                         <div class="upload-content">
                             <p class="no-image-text">
-                                Drag and drop images here or
+                                Drag and drop or paste images here, or
                             </p>
                             <label for="imageInput" class="upload-btn">Upload Images</label>
                             <p class="privacy-note">Images are processed in memory and never stored.</p>
