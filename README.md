@@ -75,6 +75,34 @@ python app.py
 http://localhost:5000
 ```
 
+## Self-host with Docker
+
+Every push to `main` publishes a ready-built image (Intel and ARM) to `ghcr.io/shannenlolol/image-editor-web-app`, so the server only downloads it:
+
+```bash
+git clone https://github.com/shannenlolol/image-editor-web-app.git
+cd image-editor-web-app
+docker compose pull
+docker compose up -d
+curl http://127.0.0.1:8081/healthz   # prints "ok"
+```
+
+The app only listens on `127.0.0.1:8081`; publish it through a reverse proxy or a Cloudflare Tunnel. `docker-compose.yml` sets `TRUST_CF_CONNECTING_IP=1`, which is only safe behind Cloudflare: remove it otherwise.
+
+The container is labelled for [Watchtower](https://containrrr.dev/watchtower/), which installs new images automatically. If Watchtower is not already running on the server, add this service to `docker-compose.yml`:
+
+```yaml
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"   # only update labelled containers
+      WATCHTOWER_CLEANUP: "true"        # delete replaced images
+      WATCHTOWER_POLL_INTERVAL: "300"   # check every 5 minutes
+```
+
 ## Built with
 
 Python, Flask, rembg, Pillow, and HTML/CSS/JavaScript.

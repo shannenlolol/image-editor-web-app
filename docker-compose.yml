@@ -1,6 +1,12 @@
 services:
   editor:
+    # The NAS pulls the image GitHub Actions publishes. `build` remains for
+    # local testing with `docker compose up -d --build`.
+    image: ghcr.io/shannenlolol/image-editor-web-app:latest
     build: .
+    labels:
+      # Lets Watchtower update this container when a new image is published.
+      com.centurylinklabs.watchtower.enable: "true"
     restart: unless-stopped
     init: true
     # Only reachable from the NAS itself; the Cloudflare Tunnel publishes it.
