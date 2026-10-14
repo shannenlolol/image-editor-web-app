@@ -9,7 +9,7 @@ window.ImageEditor = (() => {
     let selectedFile = null;
     let imageRequestId = 0;
     let imageAbortController = null;
-    let displayedImageUrl = null;
+    let applyingToAll = false;
     let selectedFileName = '';
     let sourceDimensions = null;
     let selectedBackground = 'transparent';
@@ -138,8 +138,20 @@ window.ImageEditor = (() => {
                 });
                 // Re-baseline on every load: revisiting an image keeps its history,
                 // but the restored crop may differ by rounding from the saved one.
+                // A load that also switched removal (toggled mid-load, or "Apply to
+                // all images") keeps the previous state as an undo step.
                 record.history = record.history || { past: [], future: [] };
-                record.history.current = takeSnapshot();
+                const snapshot = takeSnapshot();
+                const previous = record.history.current;
+                if (
+                    previous &&
+                    previous.settings.removeBackground !== snapshot.settings.removeBackground
+                ) {
+                    record.history.past.push(previous);
+                    if (record.history.past.length > HISTORY_LIMIT) record.history.past.shift();
+                    record.history.future = [];
+                }
+                record.history.current = snapshot;
                 controls.updateDownloadState();
             },
         };
@@ -171,12 +183,10 @@ window.ImageEditor = (() => {
             cropper = null;
         }
         controls.updateDownloadState();
+        // The displayed URL belongs to the image's record and is reused when
+        // switching back, so it is released only when the image is removed.
         previewImage.removeAttribute('src');
         previewImage.style.display = 'none';
-        if (displayedImageUrl) {
-            URL.revokeObjectURL(displayedImageUrl);
-            displayedImageUrl = null;
-        }
     }
 
     // Phone photos are 12 MP+, which mask detection does not need. Downscale
@@ -237,42 +247,57 @@ window.ImageEditor = (() => {
         return canvasToBlob(canvas);
     }
 
-    async function processSelectedImage(
-        file,
-        shouldRemoveBg = true,
-        resetEdits = true,
-    ) {
-        if (!resetEdits) saveCurrentImage();
-        invalidateImageProcessing();
-        const record = imageRecords.get(file);
-        record.status = 'loading';
-        record.removeBackground = shouldRemoveBg;
-        record.savedCanvas = null;
-        record.exportError = null;
-        if (resetEdits) record.cropData = null;
-        const requestId = imageRequestId;
-        const controller = new AbortController();
-        imageAbortController = controller;
-        let url = null;
-        let failureMessage = 'Could not open this image. Try another image file.';
-        showLoading();
-
+    // Decode a picture so the cropper can show it at once. Returns null when a
+    // newer request has taken over, so callers stop without touching the editor.
+    async function decodeView(blob, isStale) {
+        const url = URL.createObjectURL(blob);
         try {
-            let blob = file;
-            // Reuse this image's earlier server result, so switching back to it
-            // or toggling removal again does not upload it a second time.
-            if (shouldRemoveBg && !record.removal) {
-                const { upload, decodable } = await prepareUpload(file);
-                if (requestId !== imageRequestId) return;
+            const preview = new Image();
+            preview.src = url;
+            await preview.decode();
+            if (isStale()) {
+                URL.revokeObjectURL(url);
+                return null;
+            }
+            return { url, width: preview.naturalWidth, height: preview.naturalHeight };
+        } catch (error) {
+            URL.revokeObjectURL(url);
+            throw error;
+        }
+    }
+
+    // Each image keeps its decoded original and cut-out once made, so switching
+    // between them, or back to the image, needs no reprocessing.
+    async function loadOriginal(record, isStale) {
+        if (record.original) return record.original;
+        try {
+            const view = await decodeView(record.file, isStale);
+            if (view) record.original = view;
+            return view;
+        } catch (error) {
+            error.userMessage = 'This image could not be opened. Try another image file.';
+            throw error;
+        }
+    }
+
+    async function loadCutout(record, signal, isStale) {
+        if (record.cutout) return record.cutout;
+        let failureMessage = 'Could not open this image. Try another image file.';
+        try {
+            // The server's result is kept too, so a cut-out that failed to
+            // decode can be rebuilt without uploading the image again.
+            if (!record.removal) {
+                const { upload, decodable } = await prepareUpload(record.file);
+                if (isStale()) return null;
                 const formData = new FormData();
-                formData.append('file', upload, file.name);
-                failureMessage = 'Could not reach background removal. Check your connection and upload the image again to retry.';
+                formData.append('file', upload, record.file.name);
+                failureMessage = 'Could not reach background removal. Check your connection and try again.';
                 const response = await fetch(decodable ? '/remove-bg/mask' : '/remove-bg', {
                     method: 'POST',
                     body: formData,
-                    signal: controller.signal,
+                    signal,
                 });
-                if (requestId !== imageRequestId) return;
+                if (isStale()) return null;
                 if (!response.ok) {
                     const error = new Error('Background removal failed.');
                     error.userMessage = response.status === 413
@@ -288,39 +313,75 @@ window.ImageEditor = (() => {
                     }
                     throw error;
                 }
-                failureMessage = 'Could not read the processed image. Upload the image again to retry.';
+                failureMessage = 'Could not read the processed image. Please try again.';
                 // Decodable files get a mask to apply here; the others get the
                 // server's finished cut-out.
                 record.removal = { blob: await response.blob(), isMask: decodable };
             }
-            if (shouldRemoveBg) {
-                if (requestId !== imageRequestId) return;
-                blob = record.removal.blob;
-                if (record.removal.isMask) {
-                    failureMessage = 'Could not apply the background removal. Upload the image again to retry.';
-                    blob = await applyMask(file, blob);
-                }
+            let blob = record.removal.blob;
+            if (record.removal.isMask) {
+                failureMessage = 'Could not apply the background removal. Please try again.';
+                blob = await applyMask(record.file, blob);
+                if (isStale()) return null;
             }
-            if (requestId !== imageRequestId) return;
+            failureMessage = 'The processed image could not be opened. Please try again.';
+            const view = await decodeView(blob, isStale);
+            if (view) record.cutout = view;
+            return view;
+        } catch (error) {
+            if (!error.userMessage) error.userMessage = failureMessage;
+            throw error;
+        }
+    }
 
-            // Decode separately so an old image-load event cannot update the editor.
-            failureMessage = shouldRemoveBg
-                ? 'The processed image could not be opened. Upload the image again to retry.'
-                : 'This image could not be opened. Try another image file.';
-            url = URL.createObjectURL(blob);
-            const preview = new Image();
-            preview.src = url;
-            await preview.decode();
-            if (requestId !== imageRequestId) return;
+    // Build the cropper for an image, showing its cut-out or original according
+    // to its own removal setting.
+    async function processSelectedImage(file, resetEdits = true) {
+        if (!resetEdits) saveCurrentImage();
+        invalidateImageProcessing();
+        const record = imageRecords.get(file);
+        record.status = 'loading';
+        record.savedCanvas = null;
+        record.exportError = null;
+        // Kept on the record, so a load restarted by the switch still resets.
+        if (resetEdits) {
+            record.cropData = null;
+            record.needsReset = true;
+        }
+        const requestId = imageRequestId;
+        const isStale = () => requestId !== imageRequestId;
+        const controller = new AbortController();
+        imageAbortController = controller;
+        let failureMessage = 'Could not open this image. Try another image file.';
+        showLoading();
+
+        try {
+            let view = null;
+            if (record.removeBackground) {
+                try {
+                    view = await loadCutout(record, controller.signal, isStale);
+                } catch (error) {
+                    if (isStale() || error.name === 'AbortError') return;
+                    // The original can still be edited, so turn removal off
+                    // rather than discard the image.
+                    console.error('Error:', error);
+                    record.removeBackground = false;
+                    removeBgCheckbox.checked = false;
+                    alert(error.userMessage);
+                }
+                if (isStale()) return;
+            }
+            view = view || (await loadOriginal(record, isStale));
+            if (!view) return;
             failureMessage = 'Could not prepare the editor. Upload the image again to retry.';
 
-            // Background removal returns large photos downscaled, so toggling it
-            // swaps between two sizes of the same picture. The kept crop is in the
-            // previous image's pixels; rescale it so it covers the same area.
-            const size = { width: preview.naturalWidth, height: preview.naturalHeight };
+            // A server cut-out (for files the browser cannot decode) can differ
+            // in size from the original. The kept crop is in the pixels of the
+            // image the cropper was last built on; rescale it to cover the same area.
+            const size = { width: view.width, height: view.height };
             const previous = record.imageSize;
             if (
-                !resetEdits &&
+                !record.needsReset &&
                 record.cropData &&
                 previous &&
                 (previous.width !== size.width || previous.height !== size.height)
@@ -337,38 +398,130 @@ window.ImageEditor = (() => {
             }
             record.imageSize = size;
 
-            if (resetEdits) {
+            if (record.needsReset) {
+                record.needsReset = false;
                 controls.resetImageTransform();
-                sourceDimensions = {
-                    width: preview.naturalWidth,
-                    height: preview.naturalHeight,
-                };
+                sourceDimensions = size;
                 widthInput.value = String(sourceDimensions.width);
                 heightInput.value = String(sourceDimensions.height);
                 document.getElementById('aspectRatioPreset').value = 'original';
                 controls.syncPresetMenu();
             }
-            previewImage.src = url;
-            displayedImageUrl = url;
+            previewImage.src = view.url;
             initCropper(record);
             if (cropper.ready) record.status = 'ready';
             controls.updateDownloadState();
         } catch (error) {
-            if (requestId !== imageRequestId || error.name === 'AbortError')
-                return;
+            if (isStale() || error.name === 'AbortError') return;
             record.status = 'error';
             console.error('Error:', error);
-            if (url && url !== displayedImageUrl) URL.revokeObjectURL(url);
-            url = null;
             removeImage(file);
             alert(error.userMessage || failureMessage);
         } finally {
-            if (url && url !== displayedImageUrl) URL.revokeObjectURL(url);
-            if (requestId === imageRequestId) {
+            if (!isStale()) {
                 imageAbortController = null;
                 hideLoading();
                 controls.updateDownloadState();
             }
+        }
+    }
+
+    // Switch the current image between its original and its cut-out. Both are
+    // kept once made, so this swaps the picture inside the existing cropper:
+    // the crop and transforms stay put, and the switch is one undo step.
+    async function setRemoveBackground(on) {
+        const file = selectedFile;
+        const record = imageRecords.get(file);
+        if (!record) return;
+        removeBgCheckbox.checked = on;
+        if (!cropper || !cropper.ready || imageAbortController) {
+            // Still loading: start again with the new setting.
+            record.removeBackground = on;
+            await processSelectedImage(file, false);
+            return;
+        }
+        if (Boolean(record.removeBackground) === on) return;
+        // Record an edit still in progress (such as a typed width) as its own step.
+        commitEdit();
+        let view = on ? record.cutout : record.original;
+        if (!view) {
+            // The picture stays on screen while the cut-out is made; the
+            // controls, undo and download wait for it.
+            const requestId = imageRequestId;
+            const isStale = () => requestId !== imageRequestId;
+            const controller = new AbortController();
+            imageAbortController = controller;
+            controls.setToolControlsDisabled(true);
+            controls.updateDownloadState();
+            showLoading();
+            try {
+                view = on
+                    ? await loadCutout(record, controller.signal, isStale)
+                    : await loadOriginal(record, isStale);
+            } catch (error) {
+                if (isStale() || error.name === 'AbortError') return;
+                console.error('Error:', error);
+                alert(error.userMessage);
+            } finally {
+                if (!isStale()) {
+                    imageAbortController = null;
+                    hideLoading();
+                    controls.setToolControlsDisabled(false);
+                    controls.updateDownloadState();
+                }
+            }
+            if (isStale()) return;
+            if (!view) {
+                removeBgCheckbox.checked = Boolean(record.removeBackground);
+                return;
+            }
+        }
+        record.removeBackground = on;
+        showView(view);
+        commitEdit();
+    }
+
+    // Both pictures are already decoded, so the browser shows the new one at
+    // once. Cropper keeps its canvas and crop box when told the size is the
+    // same; a server cut-out of another size is stretched to the original's,
+    // which it matches in shape, so the crop still covers the same area.
+    function showView(view) {
+        cropper.replace(view.url, true);
+    }
+
+    // Reset returns to the image as uploaded: background back, and crop,
+    // rotation, flip and size at their defaults. The cut-out is kept, so
+    // turning removal on again is instant.
+    function resetImage() {
+        const record = imageRecords.get(selectedFile);
+        if (!record || !cropper) return;
+        record.removeBackground = false;
+        removeBgCheckbox.checked = false;
+        clearHistory();
+        processSelectedImage(selectedFile);
+    }
+
+    // Apply the current image's removal setting to every image. Each one is
+    // opened in turn, so its saved export is redrawn with the change.
+    async function applyRemovalToAll() {
+        if (applyingToAll || !selectedFile) return;
+        const start = selectedFile;
+        const on = removeBgCheckbox.checked;
+        applyingToAll = true;
+        try {
+            await setRemoveBackground(on);
+            if (selectedFile !== start || Boolean(imageRecords.get(start).removeBackground) !== on)
+                return;
+            for (const [file, record] of [...imageRecords]) {
+                if (!imageRecords.has(file) || Boolean(record.removeBackground) === on) continue;
+                record.removeBackground = on;
+                await selectFile(file);
+                // Stop if the user opened another image or this one failed.
+                if (selectedFile !== file || record.removeBackground !== on) return;
+            }
+            if (imageRecords.has(start)) await selectFile(start);
+        } finally {
+            applyingToAll = false;
         }
     }
 
@@ -407,10 +560,7 @@ window.ImageEditor = (() => {
 
     function handleFiles(files) {
         if (!files.length) return;
-        const defaults = {
-            removeBackground: removeBgCheckbox.checked,
-            background: selectedBackground,
-        };
+        const defaults = { background: selectedBackground };
         files.forEach((file) => {
             imageRecords.set(file, {
                 file,
@@ -424,7 +574,7 @@ window.ImageEditor = (() => {
     }
 
     function selectFile(file, defaults = null) {
-        if (file === selectedFile && cropper && cropper.ready) return;
+        if (file === selectedFile && cropper && cropper.ready) return Promise.resolve();
         saveCurrentImage();
         invalidateImageProcessing();
         selectedFile = file;
@@ -432,15 +582,14 @@ window.ImageEditor = (() => {
         const record = imageRecords.get(file);
         if (record.settings) restoreImageSettings(record.settings);
         else {
-            removeBgCheckbox.checked = defaults
-                ? defaults.removeBackground
-                : Boolean(record.removeBackground);
             selectedBackground = defaults ? defaults.background : 'transparent';
             controls.syncBackgroundControls();
         }
+        // New uploads start with removal off; each image keeps its own setting.
+        removeBgCheckbox.checked = Boolean(record.removeBackground);
         updateSelectedThumbnail();
         uploadPlaceholder.style.display = 'none';
-        processSelectedImage(file, removeBgCheckbox.checked, !record.settings);
+        return processSelectedImage(file, !record.settings);
     }
 
     function captureImageSettings() {
@@ -449,7 +598,7 @@ window.ImageEditor = (() => {
             height: heightInput.value,
             preset: document.getElementById('aspectRatioPreset').value,
             sourceDimensions,
-            removeBackground: removeBgCheckbox.checked,
+            removeBackground: Boolean(imageRecords.get(selectedFile)?.removeBackground),
             background: selectedBackground,
             customColor: bgColorInput.value,
             rotation: rotationAngle,
@@ -463,7 +612,6 @@ window.ImageEditor = (() => {
         heightInput.value = settings.height;
         document.getElementById('aspectRatioPreset').value = settings.preset;
         sourceDimensions = settings.sourceDimensions;
-        removeBgCheckbox.checked = settings.removeBackground;
         selectedBackground = settings.background;
         bgColorInput.value = settings.customColor;
         rotationAngle = settings.rotation;
@@ -500,6 +648,15 @@ window.ImageEditor = (() => {
     }
 
     function applySnapshot({ settings, cropData }) {
+        // A step that switched removal swaps the picture back as well. Both
+        // pictures exist, since each was on screen when its snapshot was taken.
+        const record = imageRecords.get(selectedFile);
+        const view = settings.removeBackground ? record.cutout : record.original;
+        if (view && settings.removeBackground !== Boolean(record.removeBackground)) {
+            record.removeBackground = settings.removeBackground;
+            removeBgCheckbox.checked = settings.removeBackground;
+            showView(view);
+        }
         restoreImageSettings(settings);
         cropper.setAspectRatio(currentAspectRatio());
         controls.applyImageTransform();
@@ -518,8 +675,7 @@ window.ImageEditor = (() => {
         controls.updateDownloadState();
     }
 
-    // Background removal and Reset replace the image itself, so earlier
-    // snapshots no longer apply to it.
+    // Reset starts the image afresh, so earlier snapshots no longer apply.
     function clearHistory() {
         const record = imageRecords.get(selectedFile);
         if (record) record.history = null;
@@ -554,6 +710,7 @@ window.ImageEditor = (() => {
             document.getElementById('batchImages').children.length === 0;
         document.getElementById('batchEmptyState').hidden = !isEmpty;
         document.getElementById('batchImages').hidden = isEmpty;
+        document.getElementById('applyRemovalToAll').hidden = imageRecords.size < 2;
         if (isEmpty) window.removeEventListener('beforeunload', confirmLeavingEditor);
         else window.addEventListener('beforeunload', confirmLeavingEditor);
         if (controls) controls.updateDownloadState();
@@ -584,9 +741,12 @@ window.ImageEditor = (() => {
         );
         if (!thumbnail) return;
         const thumbnailImage = thumbnail.firstElementChild.firstElementChild;
+        const record = imageRecords.get(file);
         thumbnail.remove();
         imageRecords.delete(file);
         URL.revokeObjectURL(thumbnailImage.src);
+        for (const view of [record?.original, record?.cutout])
+            if (view) URL.revokeObjectURL(view.url);
         updateBatchEmptyState();
         if (
             selectedFile === file ||
@@ -852,10 +1012,11 @@ window.ImageEditor = (() => {
             controls = handlers;
         },
         handleFiles,
-        processSelectedImage,
+        setRemoveBackground,
+        applyRemovalToAll,
+        resetImage,
         downloadImages,
         commitEdit,
-        clearHistory,
         undo: () => stepHistory('past', 'future'),
         redo: () => stepHistory('future', 'past'),
         get canUndo() {

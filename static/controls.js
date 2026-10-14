@@ -281,13 +281,12 @@
         if (disabled) closePresetMenu();
     }
 
-    // Handle background removal toggle
     removeBgCheckbox.addEventListener('change', function () {
-        if (editor.selectedFile) {
-            editor.clearHistory();
-            editor.processSelectedImage(editor.selectedFile, this.checked, false);
-        }
+        editor.setRemoveBackground(this.checked);
     });
+    document
+        .getElementById('applyRemovalToAll')
+        .addEventListener('click', editor.applyRemovalToAll);
 
     // Ignore incomplete values while typing, and update without rebuilding the editor.
     function applyResolution() {
@@ -317,18 +316,7 @@
     widthInput.addEventListener('change', editor.commitEdit);
     heightInput.addEventListener('change', editor.commitEdit);
 
-    // Reset functionality - resets image to original state
-    document
-        .getElementById('resetButton')
-        .addEventListener('click', function () {
-            if (editor.selectedFile && editor.cropper) {
-                editor.clearHistory();
-                editor.processSelectedImage(
-                    editor.selectedFile,
-                    removeBgCheckbox.checked,
-                );
-            }
-        });
+    document.getElementById('resetButton').addEventListener('click', editor.resetImage);
 
     document
         .getElementById('aspectRatioPreset')

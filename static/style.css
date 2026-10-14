@@ -994,6 +994,18 @@ input:focus-visible {
   line-height: 1.5;
   color: var(--muted);
 }
+.apply-all-button {
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--selected-text);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
 .background-switch {
   appearance: none;
   -webkit-appearance: none;
