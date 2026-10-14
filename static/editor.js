@@ -259,7 +259,9 @@ window.ImageEditor = (() => {
 
         try {
             let blob = file;
-            if (shouldRemoveBg) {
+            // Reuse this image's earlier server result, so switching back to it
+            // or toggling removal again does not upload it a second time.
+            if (shouldRemoveBg && !record.removal) {
                 const { upload, decodable } = await prepareUpload(file);
                 if (requestId !== imageRequestId) return;
                 const formData = new FormData();
@@ -287,9 +289,14 @@ window.ImageEditor = (() => {
                     throw error;
                 }
                 failureMessage = 'Could not read the processed image. Upload the image again to retry.';
-                blob = await response.blob();
-                if (decodable) {
-                    if (requestId !== imageRequestId) return;
+                // Decodable files get a mask to apply here; the others get the
+                // server's finished cut-out.
+                record.removal = { blob: await response.blob(), isMask: decodable };
+            }
+            if (shouldRemoveBg) {
+                if (requestId !== imageRequestId) return;
+                blob = record.removal.blob;
+                if (record.removal.isMask) {
                     failureMessage = 'Could not apply the background removal. Upload the image again to retry.';
                     blob = await applyMask(file, blob);
                 }

@@ -952,7 +952,8 @@ test('background reprocessing preserves custom dimensions and reset restores nat
     assert.equal(e.cropper().options.aspectRatio, 700 / 1151);
     e.element('resetButton').click();
     await flush();
-    await e.respond(e.requests[1], file);
+    // Reset reapplies the stored mask instead of uploading again.
+    assert.equal(e.requests.length, 1);
     await finishCutout(e, file);
     assert.equal(e.element('widthInput').value, '1151');
     assert.equal(e.element('heightInput').value, '1151');
@@ -1025,8 +1026,9 @@ test('background swatches work without removal and preserve the selection across
     await e.decode();
     assert.equal(e.cropper().options.fillColor, '#000000');
     await e.toggle(true);
-    await e.respond(e.requests[1], { name: 'cutout again' });
+    assert.equal(e.requests.length, 1);
     await e.decode();
+    assert.equal(e.visibleImage().name, 'cutout');
     assert.equal(e.cropper().options.fillColor, '#000000');
 });
 
@@ -1055,7 +1057,7 @@ test('custom colour previews on input without replacing the cropper, and transpa
     assert.equal(cropper.options.fillColor, 'transparent');
     e.element('resetButton').click();
     await flush();
-    await e.respond(e.requests[1], { name: 'reset cutout' });
+    assert.equal(e.requests.length, 1);
     await e.decode();
     assert.equal(e.cropper().options.fillColor, 'transparent');
 });
@@ -1208,7 +1210,7 @@ test('flip controls toggle independently and background reprocessing preserves t
     assert.equal(e.cropper().verticalScale, -1);
     e.element('resetButton').click();
     await flush();
-    await e.respond(e.requests[1], { name: 'reset' });
+    assert.equal(e.requests.length, 1);
     await e.decode();
     assert.equal(e.cropper().rotation, 0);
     assert.equal(e.cropper().verticalScale, 1);
@@ -1530,6 +1532,37 @@ test('switching images while a mask is applied discards the stale cut-out', asyn
     assert.equal(e.visibleImage().name, 'B.png');
     assert.equal(e.filename(), 'B.png');
     assert.equal(e.croppers.length, 1);
+});
+
+test('switching back to an image reapplies its stored mask without uploading again', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 });
+    const mask = { width: 4, height: 4 };
+    await e.respond(e.requests[0], mask);
+    await finishCutout(e, { name: 'A cutout' });
+    await e.select({ name: 'B.png' });
+    await e.respond(e.requests[1], { name: 'B cutout' });
+    await e.decode();
+    e.element('batchImages').children[0].click();
+    await flush();
+    assert.equal(e.requests.length, 2);
+    const [maskDraw] = e.exports.at(-1).canvas.draws;
+    assert.equal(maskDraw.source.width, mask.width);
+    await finishCutout(e, { name: 'A cutout again' });
+    assert.equal(e.visibleImage().name, 'A cutout again');
+    assert.equal(e.filename(), 'A.png');
+});
+
+test('an interrupted removal is not stored, so returning to the image uploads it again', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 });
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    await e.respond(e.requests[0], { width: 4, height: 4 });
+    e.element('batchImages').children[0].click();
+    await flush();
+    assert.equal(e.requests.length, 2);
+    assert.equal(e.requests[1].url, '/remove-bg/mask');
 });
 
 test('toggling removal on a large photo keeps the crop exactly in place', async () => {
