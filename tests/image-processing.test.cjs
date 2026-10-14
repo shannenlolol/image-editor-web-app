@@ -202,7 +202,11 @@ function editor({ webpEncoding = true } = {}) {
         },
         Cropper: class {
             constructor(image, options) {
+                this.image = image;
+                // `src` is the image the cropper was built on (it sets the natural
+                // size); `url` is the one on screen after replace().
                 this.src = image.src;
+                this.url = image.src;
                 this.options = options;
                 this.ready = false;
                 this.data = { width: 640, height: 480 };
@@ -216,6 +220,12 @@ function editor({ webpEncoding = true } = {}) {
             }
             destroy() {
                 this.destroyed = true;
+            }
+            replace(url, hasSameSize) {
+                this.replacements = (this.replacements || 0) + 1;
+                this.hasSameSize = hasSameSize;
+                this.url = url;
+                this.image.src = url;
             }
             setAspectRatio(ratio) {
                 this.options.aspectRatio = ratio;
@@ -262,7 +272,7 @@ function editor({ webpEncoding = true } = {}) {
             }
             getCroppedCanvas(options) {
                 return {
-                    source: urls.get(this.src).name,
+                    source: urls.get(this.url).name,
                     data: this.getData(),
                     options,
                     toBlob: (callback) => exports.push(callback),
@@ -296,12 +306,14 @@ function editor({ webpEncoding = true } = {}) {
     });
     for (const script of scripts)
         vm.runInContext(script.source, context, { filename: script.filename });
-    // Waits for the upload shrinking step, so a removal request is sent on return.
+    // New uploads open with removal off. Turning it on while the original is
+    // still loading restarts the load with removal, as a quick user would; this
+    // waits for the upload shrinking step, so the request is sent on return.
     async function select(file, removeBackground = true) {
-        element('removeBg').checked = removeBackground;
         context.selectedFile = file;
         context.window.ImageEditor.handleFiles([file]);
         await flush();
+        if (removeBackground) await toggle(true);
     }
     async function toggle(checked) {
         element('removeBg').checked = checked;
@@ -408,9 +420,19 @@ test('downloading keeps the leave warning while images remain in the editor', as
     assert.equal(e.leavingWouldPrompt(), true);
 });
 
-test('upload rejection displays the server message and permits selecting another image', async () => {
+// The usual flow: the original opens with removal off, then the switch is turned on.
+async function openThenRemove(e, file) {
+    await e.select(file, false);
+    await e.decode();
+    await e.toggle(true);
+}
+
+
+test('upload rejection displays the server message and keeps the original to retry', async () => {
     const e = editor();
-    await e.select({ name: 'large.png' });
+    const file = { name: 'large.png' };
+    await openThenRemove(e, file);
+    const cropper = e.cropper();
     e.requests[0].resolve({
         ok: false,
         status: 413,
@@ -419,16 +441,19 @@ test('upload rejection displays the server message and permits selecting another
     await flush();
     assert.match(e.alerts[0], /25 megapixels/);
     assert.equal(e.loading(), false);
-    assert.equal(e.decodes.length, 0);
-    await e.select({ name: 'valid.png' }, false);
-    await e.decode();
-    assert.equal(e.filename(), 'valid.png');
-    assert.equal(e.loading(), false);
+    assert.equal(e.decodes.length, 1);
+    assert.equal(e.element('removeBg').checked, false);
+    assert.equal(e.cropper(), cropper);
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.element('backgroundControls').disabled, false);
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+    await e.toggle(true);
+    assert.equal(e.requests.length, 2);
 });
 
 test('non-JSON upload rejection has a useful fallback', async () => {
     const e = editor();
-    await e.select({ name: 'large.png' });
+    await openThenRemove(e, { name: 'large.png' });
     e.requests[0].resolve({
         ok: false,
         status: 413,
@@ -454,18 +479,20 @@ test('a delayed validation error cannot interrupt a newer selection', async () =
     assert.equal(e.filename(), 'next.png');
 });
 
-test('network failure clears the failed upload and allows uploading it again', async () => {
+test('network failure keeps the image and lets the switch try again', async () => {
     const e = editor();
-    await e.select({ name: 'A.png' });
+    const file = { name: 'A.png' };
+    await openThenRemove(e, file);
     e.requests[0].reject(new TypeError('Failed to fetch'));
     await flush();
-    assert.match(e.alerts[0], /connection.*upload the image again/);
+    assert.match(e.alerts[0], /connection.*try again/);
     assert.equal(e.loading(), false);
-    assert.equal(e.cropper(), null);
-    assert.equal(e.element('downloadMenuButton').disabled, true);
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.element('removeBg').checked, false);
+    assert.equal(e.element('batchImages').children.length, 1);
+    assert.equal(e.element('downloadMenuButton').disabled, false);
 
-    assert.equal(e.element('batchImages').children.length, 0);
-    await e.select({ name: 'A.png' });
+    await e.toggle(true);
     assert.equal(e.loading(), true);
     assert.equal(e.requests.length, 2);
     await e.respond(e.requests[1], { name: 'recovered' });
@@ -476,9 +503,24 @@ test('network failure clears the failed upload and allows uploading it again', a
     assert.equal(e.alerts.length, 1);
 });
 
+test('a removal that fails while the image opens shows the original with removal off', async () => {
+    const e = editor();
+    const file = { name: 'A.png' };
+    await e.select(file);
+    e.requests[0].reject(new TypeError('Failed to fetch'));
+    await flush();
+    assert.match(e.alerts[0], /connection/);
+    assert.equal(e.element('removeBg').checked, false);
+    await e.decode();
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.loading(), false);
+    assert.equal(e.element('batchImages').children.length, 1);
+    assert.equal(e.element('downloadMenuButton').disabled, false);
+});
+
 test('HTTP server errors never reach decoding and allow retry', async () => {
     const e = editor();
-    await e.select({ name: 'A.png' });
+    await openThenRemove(e, { name: 'A.png' });
     e.requests[0].resolve({
         ok: false,
         status: 500,
@@ -488,28 +530,27 @@ test('HTTP server errors never reach decoding and allow retry', async () => {
     await flush();
     assert.match(e.alerts[0], /Background removal failed.*try again/);
     assert.equal(e.loading(), false);
-    assert.equal(e.decodes.length, 0);
-    assert.equal(e.element('batchImages').children.length, 0);
-    await e.select({ name: 'A.png' });
+    assert.equal(e.decodes.length, 1);
+    await e.toggle(true);
     await e.respond(e.requests[1], { name: 'recovered' });
     await e.decode();
+    assert.equal(e.visibleImage().name, 'recovered');
     assert.equal(e.element('downloadMenuButton').disabled, false);
 });
 
-test('a failed response body read clears loading and allows selecting another image', async () => {
+test('a failed response body read clears loading and keeps the original', async () => {
     const e = editor();
-    await e.select({ name: 'A.png' });
+    const file = { name: 'A.png' };
+    await openThenRemove(e, file);
     e.requests[0].resolve({
         ok: true,
         blob: async () => { throw new TypeError('Connection lost'); },
     });
     await flush();
-    assert.match(e.alerts[0], /read the processed image.*retry/);
+    assert.match(e.alerts[0], /read the processed image.*try again/);
     assert.equal(e.loading(), false);
-    assert.equal(e.decodes.length, 0);
-    await e.select({ name: 'B.png' }, false);
-    await e.decode();
-    assert.equal(e.filename(), 'B.png');
+    assert.equal(e.decodes.length, 1);
+    assert.equal(e.visibleImage(), file);
     assert.equal(e.element('downloadMenuButton').disabled, false);
 });
 
@@ -570,8 +611,9 @@ test('discarding a failed upload preserves another image and its saved edits', a
     await flush();
     assert.equal(e.element('batchImages').children.length, 1);
     assert.equal(e.filename(), 'valid.png');
-    assert.equal(e.loading(), true);
-    await e.decode();
+    // The earlier image is already decoded, so it reopens without loading.
+    assert.equal(e.loading(), false);
+    assert.equal(e.decodes.length, 2);
     assert.equal(e.visibleImage().name, 'valid.png');
     assert.equal(e.element('widthInput').value, '300');
     assert.equal(e.element('heightInput').value, '200');
@@ -597,20 +639,22 @@ test('a batch of invalid uploads eventually restores the upload overlay', async 
 
 test('an invalid processed image releases its URL and can be retried', async () => {
     const e = editor();
-    await e.select({ name: 'A.png' });
+    const file = { name: 'A.png' };
+    await openThenRemove(e, file);
     await e.respond(e.requests[0], { name: 'invalid response' });
-    const decode = e.decodes[0];
+    const decode = e.decodes[1];
     decode.reject(new Error('EncodingError'));
     await flush();
-    assert.match(e.alerts[0], /processed image could not be opened.*retry/);
+    assert.match(e.alerts[0], /processed image could not be opened.*try again/);
     assert.equal(e.revoked.has(decode.url), true);
     assert.equal(e.loading(), false);
-    assert.equal(e.cropper(), null);
-    assert.equal(e.element('batchImages').children.length, 0);
-    await e.select({ name: 'A.png' });
-    await e.respond(e.requests[1], { name: 'valid response' });
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.element('batchImages').children.length, 1);
+    // The server's result is kept, so retrying only decodes it again.
+    await e.toggle(true);
+    assert.equal(e.requests.length, 1);
     await e.decode();
-    assert.equal(e.visibleImage().name, 'valid response');
+    assert.equal(e.visibleImage().name, 'invalid response');
     assert.equal(e.element('downloadMenuButton').disabled, false);
 });
 
@@ -936,7 +980,7 @@ test('new uploads initialize native dimensions and the Original preset', async (
     assert.equal(e.cropper().getData().height, 1600);
 });
 
-test('background reprocessing preserves custom dimensions and reset restores native dimensions', async () => {
+test('background removal preserves custom dimensions and reset restores native dimensions', async () => {
     const e = editor();
     const file = { name: 'square.png', width: 1151, height: 1151 };
     await e.select(file, false);
@@ -952,9 +996,7 @@ test('background reprocessing preserves custom dimensions and reset restores nat
     assert.equal(e.cropper().options.aspectRatio, 700 / 1151);
     e.element('resetButton').click();
     await flush();
-    // Reset reapplies the stored mask instead of uploading again.
-    assert.equal(e.requests.length, 1);
-    await finishCutout(e, file);
+    assert.equal(e.element('removeBg').checked, false);
     assert.equal(e.element('widthInput').value, '1151');
     assert.equal(e.element('heightInput').value, '1151');
     assert.equal(e.element('aspectRatioPreset').value, 'original');
@@ -1512,11 +1554,12 @@ test('images the browser cannot decode use the server cut-out unchanged', async 
 
 test('a mask that cannot be applied reports the failure', async () => {
     const e = editor();
-    await e.select({ name: 'A.png', width: 4, height: 4 });
+    await openThenRemove(e, { name: 'A.png', width: 4, height: 4 });
     await e.respond(e.requests[0], { name: 'not an image' });
     assert.deepEqual(e.alerts, [
-        'Could not apply the background removal. Upload the image again to retry.',
+        'Could not apply the background removal. Please try again.',
     ]);
+    assert.equal(e.element('removeBg').checked, false);
     assert.equal(e.bitmaps.every((bitmap) => bitmap.closed), true);
 });
 
@@ -1534,23 +1577,44 @@ test('switching images while a mask is applied discards the stale cut-out', asyn
     assert.equal(e.croppers.length, 1);
 });
 
-test('switching back to an image reapplies its stored mask without uploading again', async () => {
+test('switching back to an image reuses its cut-out without uploading or decoding again', async () => {
     const e = editor();
     await e.select({ name: 'A.png', width: 4, height: 4 });
-    const mask = { width: 4, height: 4 };
-    await e.respond(e.requests[0], mask);
+    await e.respond(e.requests[0], { width: 4, height: 4 });
     await finishCutout(e, { name: 'A cutout' });
     await e.select({ name: 'B.png' });
     await e.respond(e.requests[1], { name: 'B cutout' });
     await e.decode();
+    const decodes = e.decodes.length;
+    const exports = e.exports.length;
     e.element('batchImages').children[0].click();
     await flush();
     assert.equal(e.requests.length, 2);
-    const [maskDraw] = e.exports.at(-1).canvas.draws;
-    assert.equal(maskDraw.source.width, mask.width);
-    await finishCutout(e, { name: 'A cutout again' });
-    assert.equal(e.visibleImage().name, 'A cutout again');
+    assert.equal(e.decodes.length, decodes);
+    assert.equal(e.exports.length, exports);
+    assert.equal(e.visibleImage().name, 'A cutout');
     assert.equal(e.filename(), 'A.png');
+    assert.equal(e.element('removeBg').checked, true);
+});
+
+test('each image keeps its own removal setting, and new uploads start with it off', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' });
+    await e.respond(e.requests[0], { name: 'A cutout' });
+    await e.decode();
+    await e.select({ name: 'B.png' }, false);
+    assert.equal(e.element('removeBg').checked, false);
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'B.png');
+    assert.equal(e.requests.length, 1);
+    e.element('batchImages').children[0].click();
+    await flush();
+    assert.equal(e.element('removeBg').checked, true);
+    assert.equal(e.visibleImage().name, 'A cutout');
+    e.element('batchImages').children[1].click();
+    await flush();
+    assert.equal(e.element('removeBg').checked, false);
+    assert.equal(e.visibleImage().name, 'B.png');
 });
 
 test('an interrupted removal is not stored, so returning to the image uploads it again', async () => {
@@ -1581,7 +1645,7 @@ test('toggling removal on a large photo keeps the crop exactly in place', async 
     assert.deepEqual([data.x, data.y, data.width, data.height], [1000, 600, 2000, 1500]);
 });
 
-test('a reprocessed image at a different size keeps the crop on the same area', async () => {
+test('a server cut-out of another size swaps in place, and the crop is rescaled on reopening', async () => {
     const e = editor();
     // Undecodable files use the server cut-out; a smaller one stands in for any size change.
     const scan = { name: 'scan.tiff', type: 'image/tiff', width: 4000, height: 3000, undecodable: true };
@@ -1591,16 +1655,22 @@ test('a reprocessed image at a different size keeps the crop on the same area', 
     await e.toggle(true);
     await e.respond(e.requests[0], { name: 'cutout', width: 2048, height: 1536 });
     await e.decode();
+    // Stretched over the original, so the crop box stays in its pixels.
+    assert.equal(e.visibleImage().name, 'cutout');
+    assert.equal(e.cropper().hasSameSize, true);
+    assert.equal(e.croppers.length, 1);
+    const kept = e.cropper().getData();
+    assert.deepEqual([kept.x, kept.y, kept.width, kept.height], [1000, 600, 2000, 1500]);
+    // Reopened, the cropper is built on the cut-out, so the crop is rescaled to it.
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    e.element('batchImages').children[0].click();
+    await flush();
     const shrunk = e.cropper().getData();
     assert.deepEqual(
         [shrunk.x, shrunk.y, shrunk.width, shrunk.height],
         [512, 307.2, 1024, 768],
     );
-    // Switching back restores the crop in the full-size image's pixels.
-    await e.toggle(false);
-    await e.decode();
-    const full = e.cropper().getData();
-    assert.deepEqual([full.x, full.y, full.width, full.height], [1000, 600, 2000, 1500]);
 });
 
 test('reprocessing at the same size leaves the crop untouched', async () => {
@@ -1738,21 +1808,118 @@ test('history is kept per image across switching', async () => {
     assert.equal(e.cropper().rotation, 0);
 });
 
-test('background removal and reset start a fresh history', async () => {
-    for (const action of ['toggle', 'reset']) {
-        const e = await editedImage();
-        e.element('rotateRight').click();
-        if (action === 'toggle') await e.toggle(true);
-        else e.element('resetButton').click();
-        await flush();
-        assert.equal(e.element('undoButton').disabled, true, action);
-        if (action === 'toggle') await e.respond(e.requests[0], { name: 'cutout' });
-        await e.decode();
-        assert.equal(e.element('undoButton').disabled, true, action);
-        e.element('flipVertical').click();
-        e.element('undoButton').click();
-        assert.equal(e.element('undoButton').disabled, true, action);
+test('switching removal is one undo step that swaps the picture back', async () => {
+    const e = editor();
+    const file = { name: 'A.png' };
+    await e.select(file, false);
+    await e.decode();
+    e.element('rotateRight').click();
+    await e.toggle(true);
+    // Undo waits while the cut-out is being made.
+    assert.equal(e.element('undoButton').disabled, true);
+    await e.respond(e.requests[0], { name: 'cutout' });
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'cutout');
+    assert.equal(e.cropper().rotation, 90);
+    e.element('undoButton').click();
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.element('removeBg').checked, false);
+    assert.equal(e.cropper().rotation, 90);
+    e.element('undoButton').click();
+    assert.equal(e.cropper().rotation, 0);
+    e.element('redoButton').click();
+    e.element('redoButton').click();
+    assert.equal(e.visibleImage().name, 'cutout');
+    assert.equal(e.element('removeBg').checked, true);
+    // Both pictures are kept, so switching off and on again is instant.
+    await e.toggle(false);
+    assert.equal(e.visibleImage(), file);
+    await e.toggle(true);
+    assert.equal(e.visibleImage().name, 'cutout');
+    assert.equal(e.element('undoButton').disabled, false);
+    assert.equal(e.loading(), false);
+    assert.equal(e.croppers.length, 1);
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.decodes.length, 2);
+});
+
+test('turning removal on while the image opens is an undo step once it loads', async () => {
+    const e = editor();
+    const file = { name: 'A.png' };
+    await e.select(file, false);
+    await e.decode();
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    e.element('batchImages').children[0].click();
+    await e.toggle(true);
+    await e.respond(e.requests[0], { name: 'cutout' });
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'cutout');
+    e.element('undoButton').click();
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.element('removeBg').checked, false);
+});
+
+test('reset restores the original with its background and starts a fresh history', async () => {
+    const e = editor();
+    const file = { name: 'A.png' };
+    await openThenRemove(e, file);
+    await e.respond(e.requests[0], { name: 'cutout' });
+    await e.decode();
+    e.element('rotateRight').click();
+    e.element('resetButton').click();
+    await flush();
+    assert.equal(e.visibleImage(), file);
+    assert.equal(e.element('removeBg').checked, false);
+    assert.equal(e.cropper().rotation, 0);
+    assert.equal(e.element('undoButton').disabled, true);
+    // The cut-out is kept, so turning removal on again is instant.
+    await e.toggle(true);
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.visibleImage().name, 'cutout');
+});
+
+test('Apply to all images appears for batches and removes each background once', async () => {
+    const e = editor();
+    const files = [{ name: 'A.png' }, { name: 'B.png' }, { name: 'C.png' }];
+    e.upload(files.slice(0, 1));
+    await flush();
+    await e.decode();
+    assert.equal(e.element('applyRemovalToAll').hidden, true);
+    e.upload(files.slice(1));
+    await flush();
+    await e.decode();
+    assert.equal(e.element('applyRemovalToAll').hidden, false);
+    // Start from B, opened and edited; A has been opened, C has not.
+    e.element('batchImages').children[1].click();
+    await flush();
+    e.element('rotateRight').click();
+    e.element('removeBg').checked = true;
+    e.element('applyRemovalToAll').click();
+    await flush();
+    await e.respond(e.requests[0], { name: 'B cutout' });
+    await e.decode();
+    assert.equal(e.filename(), 'A.png');
+    await e.respond(e.requests[1], { name: 'A cutout' });
+    await e.decode();
+    assert.equal(e.filename(), 'C.png');
+    await e.respond(e.requests[2], { name: 'C cutout' });
+    await e.decode();
+    assert.equal(e.filename(), 'B.png');
+    assert.equal(e.visibleImage().name, 'B cutout');
+    assert.equal(e.cropper().rotation, 90);
+    assert.equal(e.requests.length, 3);
+    // Every image's saved export now uses its cut-out.
+    const pending = e.download(true);
+    for (const index of [0, 1, 2]) {
+        assert.match(e.canvases.at(-3 + index).renderedFrom.source, /cutout/);
     }
+    pending.catch(() => {});
+    // Each image can undo its own change.
+    e.element('batchImages').children[0].click();
+    await flush();
+    e.element('undoButton').click();
+    assert.equal(e.visibleImage().name, 'A.png');
 });
 
 test('keyboard shortcuts undo and redo outside text fields', async () => {
