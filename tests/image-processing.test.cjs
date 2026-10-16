@@ -37,7 +37,14 @@ function editor({ webpEncoding = true } = {}) {
             this.style = {};
             this.children = [];
             this.value = '';
-            this.classList = { add() {}, remove() {} };
+            this.dataset = {};
+            const classes = new Set();
+            this.classList = {
+                add: (name) => classes.add(name),
+                remove: (name) => classes.delete(name),
+                toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
+                contains: (name) => classes.has(name),
+            };
         }
         appendChild(child) {
             this.children.push(child);
@@ -66,6 +73,9 @@ function editor({ webpEncoding = true } = {}) {
         }
         querySelectorAll() {
             return [];
+        }
+        getBoundingClientRect() {
+            return { left: 0, top: 0, width: 800, height: 600 };
         }
         get clientWidth() {
             return 800;
@@ -119,6 +129,7 @@ function editor({ webpEncoding = true } = {}) {
                 const knownSelectors = [
                     '.cropper-view-box',
                     '.cropper-crop-box',
+                    '.cropper-face',
                     '.image-container',
                 ];
                 return knownSelectors.includes(selector) ? element(selector) : null;
@@ -137,7 +148,14 @@ function editor({ webpEncoding = true } = {}) {
                     // Pixel reads return the last drawn source's `pixels`, so tests
                     // can check mask compositing on tiny images.
                     element.draws = [];
-                    element.getContext = () => ({
+                    // Other drawing calls (the brush's paths and transforms) are
+                    // recorded as [name, ...args] so tests can check what was painted.
+                    element.ops = [];
+                    const recordOthers = {
+                        get: (target, key) =>
+                            key in target ? target[key] : (...args) => element.ops.push([key, ...args]),
+                    };
+                    element.getContext = () => new Proxy({
                         fillRect() {},
                         clearRect() {},
                         drawImage(source, ...position) {
@@ -153,7 +171,7 @@ function editor({ webpEncoding = true } = {}) {
                         putImageData(imageData) {
                             element.putPixels = imageData.data;
                         },
-                    });
+                    }, recordOthers);
                     // Browsers without an encoder return a PNG data URL instead.
                     element.toDataURL = (type) =>
                         type === 'image/webp' && webpEncoding
@@ -230,8 +248,22 @@ function editor({ webpEncoding = true } = {}) {
             setAspectRatio(ratio) {
                 this.options.aspectRatio = ratio;
             }
+            setDragMode(mode) {
+                this.options.dragMode = mode;
+            }
+            // Tests resize the stage by setting `nextContainer` before resizing.
             resize() {
                 this.resizeCount = (this.resizeCount || 0) + 1;
+                if (this.nextContainer) this.containerData = this.nextContainer;
+            }
+            getContainerData() {
+                return { ...(this.containerData || { width: 800, height: 600 }) };
+            }
+            setCanvasData(data) {
+                this.canvasData = data;
+            }
+            setCropBoxData(data) {
+                this.cropBoxData = data;
             }
             rotateTo(angle) {
                 this.rotation = angle;
@@ -262,7 +294,18 @@ function editor({ webpEncoding = true } = {}) {
             }
             getImageData() {
                 const file = urls.get(this.src);
-                return { naturalWidth: file.width || 640, naturalHeight: file.height || 480 };
+                // `displayWidth` is set by tests that check where the image is shown.
+                return {
+                    naturalWidth: file.width || 640,
+                    naturalHeight: file.height || 480,
+                    width: this.displayWidth,
+                };
+            }
+            getCanvasData() {
+                return this.canvasData;
+            }
+            getCropBoxData() {
+                return this.cropBoxData || {};
             }
             zoomTo(value) {
                 this.zoomLevel = value;
@@ -827,6 +870,26 @@ test('a current-image download keeps its snapshot when the user selects another 
     );
 });
 
+test('the hand pans the crop view, including inside the crop box, and survives a new image', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    assert.equal(e.cropper().options.toggleDragModeOnDblclick, false);
+    e.element('panToggle').click();
+    assert.equal(e.element('panToggle')['aria-pressed'], 'true');
+    assert.equal(e.cropper().options.dragMode, 'move');
+    assert.equal(e.element('.cropper-face').dataset.cropperAction, 'move');
+    assert.equal(e.element('dropZone').classList.contains('panning'), true);
+    // A new cropper starts in crop mode, so the hand is applied again when it is ready.
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.cropper().options.dragMode, 'move');
+    e.element('panToggle').click();
+    assert.equal(e.element('panToggle')['aria-pressed'], 'false');
+    assert.equal(e.cropper().options.dragMode, 'crop');
+    assert.equal(e.element('.cropper-face').dataset.cropperAction, 'all');
+});
+
 test('switching and collapsing tools preserves the active cropper and edits', async () => {
     const e = editor();
     await e.select({ name: 'A.png' }, false);
@@ -911,6 +974,29 @@ test('canvas resizing waits for Cropper readiness and reuses the instance', asyn
     assert.equal(cropper.resizeCount, 1);
     assert.equal(e.cropper(), cropper);
     assert.equal(cropper.destroyed, undefined);
+});
+
+test('a wider stage keeps the picture\'s size, and a narrower one shrinks it only to fit', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    const cropper = e.cropper();
+    cropper.canvasData = { left: 100, top: 50, width: 600, height: 400 };
+    cropper.cropBoxData = { left: 150, top: 100, width: 500, height: 300 };
+    // Closing the side panel: 200 px wider. Same size, still centred.
+    cropper.nextContainer = { width: 1000, height: 600 };
+    e.resizeCanvas();
+    assert.deepEqual({ ...cropper.canvasData }, { left: 200, top: 50, width: 600, height: 400 });
+    assert.deepEqual({ ...cropper.cropBoxData }, { left: 250, top: 100, width: 500, height: 300 });
+    // Back to 800 px: it still fits, so nothing shrinks.
+    cropper.nextContainer = { width: 800, height: 600 };
+    e.resizeCanvas();
+    assert.deepEqual({ ...cropper.canvasData }, { left: 100, top: 50, width: 600, height: 400 });
+    // 500 px wide: the 600 px picture must shrink to fit 450 px (25 px margins).
+    cropper.nextContainer = { width: 500, height: 600 };
+    e.resizeCanvas();
+    assert.deepEqual({ ...cropper.canvasData }, { left: 25, top: 112.5, width: 450, height: 300 });
+    assert.deepEqual({ ...cropper.cropBoxData }, { left: 62.5, top: 150, width: 375, height: 225 });
 });
 
 test('resolution inputs apply immediately without Enter, blur, or recreating the cropper', async () => {
@@ -1471,8 +1557,10 @@ test('images within the size limit and undecodable files are uploaded unchanged'
         { name: 'odd.heic', width: 5000, height: 5000, undecodable: true },
     ]) {
         const e = editor();
+        // The brush view's canvases exist from the start; no resize canvas follows.
+        const canvases = e.canvases.length;
         await e.select(file);
-        assert.equal(e.canvases.length, 0);
+        assert.equal(e.canvases.length, canvases);
         assert.equal(e.requests[0].options.body.entries.get('file').value, file);
     }
 });
@@ -2083,4 +2171,273 @@ test('pasting text or nothing is left to the browser', async () => {
     assert.equal(await e.paste([{ name: 'notes.txt', type: 'text/plain' }]), false);
     assert.equal(e.element('batchImages').children.length, 0);
     assert.equal(e.decodes.length, 0);
+});
+
+// The brush view is fitted to the 800 × 600 container, so a 4 × 4 image is shown
+// at 135 screen pixels per image pixel, offset by (130, 30).
+const BRUSH_SCALE = 135;
+const brushCanvas = (e) =>
+    e.element('dropZone').children.find((child) => child.className.startsWith('brush-canvas'));
+const atPixel = (x, y) => [130 + x * BRUSH_SCALE, 30 + y * BRUSH_SCALE];
+
+// Pointer positions go through an inverted matrix, so allow rounding error.
+function assertNear(actual, expected) {
+    assert.equal(actual.length, expected.length);
+    actual.forEach((value, index) =>
+        assert.ok(Math.abs(value - expected[index]) < 1e-9, `${actual} ≉ ${expected}`),
+    );
+}
+
+function pointer(target, type, [clientX, clientY], extra = {}) {
+    const event = Object.assign(
+        new Event(type, { cancelable: true }),
+        { clientX, clientY, pointerId: 1, button: 0 },
+        extra,
+    );
+    target.dispatchEvent(event);
+}
+
+function drawStroke(e, ...pixels) {
+    const canvas = brushCanvas(e);
+    pointer(canvas, 'pointerdown', atPixel(...pixels[0]));
+    for (const pixel of pixels.slice(1)) pointer(canvas, 'pointermove', atPixel(...pixel));
+    pointer(canvas, 'pointerup', atPixel(...pixels.at(-1)));
+}
+
+// The full-size coverage canvas the brush paints on.
+const coverageCanvas = (e) =>
+    e.canvases.filter((canvas) => canvas.width === 4 && canvas.ops.some(([op]) => op === 'arc')).at(-1);
+
+async function cutoutImage(file = { name: 'A.png', width: 4, height: 4 }) {
+    const e = editor();
+    await e.select(file, false);
+    await e.decode();
+    await e.toggle(true);
+    await e.respond(e.requests[0], { width: 4, height: 4 });
+    await finishCutout(e, { name: 'cutout', width: 4, height: 4 });
+    return e;
+}
+
+async function openBrushTool(e) {
+    e.element('brushTool').click();
+    await flush();
+}
+
+// Closing the panel bakes the strokes into a new cut-out: encode, then decode.
+async function closeBrushTool(e, result = { name: 'brushed', width: 4, height: 4 }) {
+    e.element('closeToolPanel').click();
+    await flush();
+    await finishCutout(e, result);
+}
+
+test('the Cutout panel hides the brush until removal is on and leaves the cropper in place', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 }, false);
+    await e.decode();
+    await openBrushTool(e);
+    assert.equal(e.element('toolPanelTitle').textContent, 'Cutout');
+    assert.equal(e.element('brushHint').hidden, true);
+    assert.equal(e.element('brushOptions').hidden, true);
+    assert.equal(brushCanvas(e).hidden, true);
+});
+
+test('the removal switch in the Cutout panel opens and closes the brush, keeping strokes', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 }, false);
+    await e.decode();
+    await openBrushTool(e);
+    await e.toggle(true);
+    await e.respond(e.requests[0], { width: 4, height: 4 });
+    await finishCutout(e, { name: 'cutout', width: 4, height: 4 });
+    await flush();
+    assert.equal(e.element('brushOptions').hidden, false);
+    assert.equal(brushCanvas(e).hidden, false);
+    drawStroke(e, [1, 1]);
+    await e.toggle(false);
+    assert.equal(brushCanvas(e).hidden, true);
+    assert.equal(e.element('brushOptions').hidden, true);
+    // Turning it on again rebuilds the cut-out with the stroke, then reopens the brush.
+    await e.toggle(true);
+    await finishCutout(e, { name: 'brushed', width: 4, height: 4 });
+    await flush();
+    assert.equal(e.requests.length, 1);
+    assert.equal(brushCanvas(e).hidden, false);
+});
+
+test('the brush is not offered for files that use the server cut-out', async () => {
+    const e = editor();
+    await e.select({ name: 'scan.tiff', width: 4, height: 4, undecodable: true }, false);
+    await e.decode();
+    await e.toggle(true);
+    await e.respond(e.requests[0], { name: 'server cutout', width: 4, height: 4 });
+    await e.decode();
+    await openBrushTool(e);
+    assert.match(e.element('brushHint').textContent, /not available/);
+    assert.equal(brushCanvas(e).hidden, true);
+});
+
+test('painting erases along the stroke in image pixels and is one undo step', async () => {
+    const e = await cutoutImage();
+    await openBrushTool(e);
+    assert.equal(e.element('brushHint').hidden, true);
+    assert.equal(e.element('brushOptions').hidden, false);
+    assert.equal(brushCanvas(e).hidden, false);
+    assert.equal(e.element('redoButton').disabled, true);
+    drawStroke(e, [1, 2], [3, 2]);
+    const ops = coverageCanvas(e).ops;
+    // The default 40 px brush is 40 / 135 image pixels wide at this zoom.
+    const dot = ops.find(([op]) => op === 'arc');
+    assertNear(dot.slice(1, 4), [1, 2, 40 / BRUSH_SCALE / 2]);
+    assertNear(ops.find(([op]) => op === 'lineTo').slice(1), [3, 2]);
+    e.element('undoButton').click();
+    assert.equal(e.element('redoButton').disabled, false);
+    // Undoing the stroke leaves the earlier removal step in place.
+    assert.equal(e.element('removeBg').checked, true);
+    assert.equal(brushCanvas(e).hidden, false);
+    // Nothing is uploaded again, and the cropper is kept for later.
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.croppers.length, 1);
+});
+
+test('restore mode and brush size apply to the next stroke, and zoom maps the pointer', async () => {
+    const e = await cutoutImage();
+    await openBrushTool(e);
+    e.element('brushRestore').click();
+    assert.equal(e.element('brushRestore')['aria-pressed'], 'true');
+    assert.equal(e.element('brushErase')['aria-pressed'], 'false');
+    const size = e.element('brushSize');
+    size.value = '27';
+    size.dispatchEvent(new Event('input'));
+    assert.equal(e.element('brushSizeValue').textContent, '27 px');
+    // Zooming in about the centre doubles the scale; the image's (2, 2) stays put.
+    const cropperZoom = e.cropper().zoomLevel;
+    e.element('zoomIn').click();
+    e.element('zoomIn').click();
+    assert.equal(e.cropper().zoomLevel, cropperZoom);
+    pointer(brushCanvas(e), 'pointerdown', atPixel(2, 2));
+    pointer(brushCanvas(e), 'pointerup', atPixel(2, 2));
+    const dot = coverageCanvas(e).ops.filter(([op]) => op === 'arc').at(-1);
+    assert.deepEqual(dot.slice(1, 3), [2, 2]);
+    assert.ok(Math.abs(dot[3] - 27 / (BRUSH_SCALE * 1.5625) / 2) < 1e-9);
+    // The hand beside the zoom buttons pans instead of painting.
+    e.element('panToggle').click();
+    const arcs = coverageCanvas(e).ops.length;
+    pointer(brushCanvas(e), 'pointerdown', [400, 300]);
+    pointer(brushCanvas(e), 'pointermove', [450, 300]);
+    pointer(brushCanvas(e), 'pointerup', [450, 300]);
+    assert.equal(coverageCanvas(e).ops.length, arcs);
+});
+
+test('the brush view opens where the crop view shows the image', async () => {
+    const e = await cutoutImage();
+    // The crop view shows the 4 px image 400 px wide, centred at (300, 250).
+    e.cropper().canvasData = { left: 100, top: 50, width: 400, height: 400 };
+    e.cropper().displayWidth = 400;
+    await openBrushTool(e);
+    // Pointer positions map through the crop view's scale of 100 px per image pixel.
+    const canvas = brushCanvas(e);
+    pointer(canvas, 'pointerdown', [100 + 3 * 100, 50 + 1 * 100]);
+    pointer(canvas, 'pointerup', [100 + 3 * 100, 50 + 1 * 100]);
+    const dot = coverageCanvas(e).ops.filter(([op]) => op === 'arc').at(-1);
+    assertNear(dot.slice(1, 4), [3, 1, 40 / 100 / 2]);
+});
+
+test('the brush view shows the crop box and the rotation, as the crop view does', async () => {
+    const e = await cutoutImage();
+    e.element('rotateRight').click();
+    e.cropper().canvasData = { left: 100, top: 50, width: 400, height: 400 };
+    e.cropper().displayWidth = 400;
+    e.cropper().cropBoxData = { left: 150, top: 100, width: 200, height: 100 };
+    await openBrushTool(e);
+    // Everything outside the crop box is dimmed, so the box is cut out of the dimming.
+    assert.ok(brushCanvas(e).ops.some((op) => op.join() === 'rect,150,100,200,100'));
+    // Turned 90° clockwise about the image's centre (300, 250): the pixel one to
+    // the right of the centre, (3, 2), is shown 100 px below it.
+    pointer(brushCanvas(e), 'pointerdown', [300, 350]);
+    pointer(brushCanvas(e), 'pointerup', [300, 350]);
+    const dot = coverageCanvas(e).ops.filter(([op]) => op === 'arc').at(-1);
+    assertNear(dot.slice(1, 3), [3, 2]);
+});
+
+test('closing the brush bakes the strokes into the cut-out the cropper shows', async () => {
+    const e = await cutoutImage();
+    const cropper = e.cropper();
+    await openBrushTool(e);
+    drawStroke(e, [1, 1]);
+    await closeBrushTool(e);
+    assert.equal(brushCanvas(e).hidden, true);
+    assert.equal(e.cropper(), cropper);
+    assert.equal(e.visibleImage().name, 'brushed');
+    assert.equal(e.requests.length, 1);
+    assert.equal(e.loading(), false);
+    // Undo outside the brush rebuilds the cut-out without the stroke.
+    e.element('undoButton').click();
+    await flush();
+    assert.equal(e.loading(), true);
+    await finishCutout(e, { name: 'unbrushed', width: 4, height: 4 });
+    assert.equal(e.visibleImage().name, 'unbrushed');
+    assert.equal(e.loading(), false);
+});
+
+test('turning removal off and on keeps the brush edits without rebuilding', async () => {
+    const e = await cutoutImage();
+    await openBrushTool(e);
+    drawStroke(e, [1, 1]);
+    await closeBrushTool(e);
+    const exports = e.exports.length;
+    await e.toggle(false);
+    assert.equal(e.visibleImage().name, 'A.png');
+    await e.toggle(true);
+    assert.equal(e.visibleImage().name, 'brushed');
+    assert.equal(e.exports.length, exports);
+    assert.equal(e.loading(), false);
+});
+
+test('reset discards brush edits and rebuilds the plain cut-out without uploading', async () => {
+    const e = await cutoutImage();
+    await openBrushTool(e);
+    drawStroke(e, [1, 1]);
+    await closeBrushTool(e);
+    await openBrushTool(e);
+    e.element('resetButton').click();
+    await flush();
+    assert.equal(brushCanvas(e).hidden, true);
+    assert.equal(e.element('removeBg').checked, false);
+    assert.equal(e.element('brushOptions').hidden, true);
+    assert.equal(e.element('undoButton').disabled, true);
+    e.element('backgroundTool').click();
+    await e.toggle(true);
+    // Rebuilt from the stored mask, not the brushed cut-out.
+    const [maskDraw] = e.exports.at(-1).canvas.draws;
+    assert.equal(maskDraw.source.width, 4);
+    await finishCutout(e, { name: 'plain cutout', width: 4, height: 4 });
+    assert.equal(e.visibleImage().name, 'plain cutout');
+    assert.equal(e.requests.length, 1);
+});
+
+test('switching images or downloading while brushing bakes the strokes first', async () => {
+    const e = await cutoutImage();
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    e.element('batchImages').children[0].click();
+    await flush();
+    await openBrushTool(e);
+    drawStroke(e, [1, 1]);
+    e.element('batchImages').children[1].click();
+    await flush();
+    assert.equal(e.filename(), 'A.png');
+    await finishCutout(e, { name: 'brushed A', width: 4, height: 4 });
+    assert.equal(e.filename(), 'B.png');
+    // A's saved export uses the brushed cut-out.
+    e.element('batchImages').children[0].click();
+    await flush();
+    assert.equal(e.visibleImage().name, 'brushed A');
+    drawStroke(e, [2, 2]);
+    const pending = e.download();
+    await flush();
+    await finishCutout(e, { name: 'brushed again', width: 4, height: 4 });
+    e.exports.at(-1)(new Blob(['png']));
+    await pending;
+    assert.equal(e.downloads.length, 1);
+    assert.equal(e.canvases.at(-1).draws[0].source.source, 'brushed again');
 });

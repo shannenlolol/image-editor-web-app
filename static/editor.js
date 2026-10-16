@@ -2,6 +2,7 @@
 window.ImageEditor = (() => {
     'use strict';
 
+    const ImageBrush = window.ImageBrush;
     let controls;
     const imageRecords = new Map();
     let exportBusy = false;
@@ -10,6 +11,12 @@ window.ImageEditor = (() => {
     let imageRequestId = 0;
     let imageAbortController = null;
     let applyingToAll = false;
+    // The open brush view's image and full-size layers; see openBrush.
+    let brushSession = null;
+    // Gives each brush state a unique number, so a cut-out records which one it shows.
+    let brushVersions = 0;
+    // The picture the cropper is showing, so swapping to it again is skipped.
+    let shownUrl = null;
     let selectedFileName = '';
     let sourceDimensions = null;
     let selectedBackground = 'transparent';
@@ -65,7 +72,9 @@ window.ImageEditor = (() => {
             viewMode: 0,
             autoCropArea: 1,
             background: true,
-            responsive: true,
+            // The stage's ResizeObserver calls resizeCropper instead, which
+            // keeps the image's size; Cropper's own handler would scale it.
+            responsive: typeof ResizeObserver === 'undefined',
             restore: true,
             center: true,
             highlight: false,
@@ -73,7 +82,8 @@ window.ImageEditor = (() => {
             cropBoxResizable: true,
             guides: true,
             dragMode: 'crop',
-            toggleDragModeOnDblclick: true,
+            // The hand button switches modes, so a double-click must not do it unseen.
+            toggleDragModeOnDblclick: false,
             fillColor: selectedBackground,
             minContainerWidth: 0,
             minContainerHeight: 0,
@@ -98,6 +108,7 @@ window.ImageEditor = (() => {
                 record.status = 'ready';
                 controls.setToolControlsDisabled(false);
                 controls.updateBackgroundColor(selectedBackground);
+                applyPanning();
                 const cropBox = document.querySelector('.cropper-crop-box');
                 if (cropBox) {
                     cropBox.style.cursor = 'move';
@@ -153,21 +164,50 @@ window.ImageEditor = (() => {
                 }
                 record.history.current = snapshot;
                 controls.updateDownloadState();
+                controls.syncBrushPanel();
+                if (controls.brushToolActive()) openBrush();
             },
         };
 
         cropper = new Cropper(previewImage, options);
     }
 
+    // The hand beside the zoom buttons pans the crop view and the brush view.
+    let panning = false;
+    const panToggle = document.getElementById('panToggle');
+
+    function applyPanning() {
+        panToggle.setAttribute('aria-pressed', String(panning));
+        dropZone.classList.toggle('panning', panning);
+        brushView.setPanning(panning);
+        if (!cropper || !cropper.ready) return;
+        cropper.setDragMode(panning ? 'move' : 'crop');
+        // Cropper's move mode still moves the crop box when dragged inside it,
+        // which usually covers most of the view. Point the crop box's face at
+        // the image instead ('all' is Cropper's own action for moving the box).
+        const face = document.querySelector('.cropper-face');
+        if (face) face.dataset.cropperAction = panning ? 'move' : 'all';
+    }
+
+    panToggle.addEventListener('click', () => {
+        panning = !panning;
+        applyPanning();
+    });
+
     // Register zoom handlers once, independent of cropper recreation.
+    // While the brush view is open, the zoom buttons zoom it instead.
     document.getElementById('zoomIn').addEventListener('click', () => {
+        if (brushView.zoom(1.25)) return;
         if (cropper && cropper.ready) cropper.zoom(0.1);
     });
     document.getElementById('zoomOut').addEventListener('click', () => {
+        if (brushView.zoom(0.8)) return;
         if (cropper && cropper.ready) cropper.zoom(-0.1);
     });
 
     function invalidateImageProcessing() {
+        endBrush();
+        shownUrl = null;
         controls.setToolControlsDisabled(true);
         const previous = imageRecords.get(selectedFile);
         if (previous && previous.status === 'loading')
@@ -281,7 +321,8 @@ window.ImageEditor = (() => {
     }
 
     async function loadCutout(record, signal, isStale) {
-        if (record.cutout) return record.cutout;
+        if (freshCutout(record)) return record.cutout;
+        const version = brushVersion(record);
         let failureMessage = 'Could not open this image. Try another image file.';
         try {
             // The server's result is kept too, so a cut-out that failed to
@@ -321,12 +362,20 @@ window.ImageEditor = (() => {
             let blob = record.removal.blob;
             if (record.removal.isMask) {
                 failureMessage = 'Could not apply the background removal. Please try again.';
-                blob = await applyMask(record.file, blob);
+                blob = version
+                    ? await renderBrushedCutout(record)
+                    : await applyMask(record.file, blob);
                 if (isStale()) return null;
             }
             failureMessage = 'The processed image could not be opened. Please try again.';
             const view = await decodeView(blob, isStale);
-            if (view) record.cutout = view;
+            if (view) {
+                // An older cut-out may still be on screen until the caller swaps
+                // in this one; an already-loaded image is unaffected by revoking.
+                if (record.cutout) URL.revokeObjectURL(record.cutout.url);
+                record.cutout = view;
+                record.cutoutVersion = version;
+            }
             return view;
         } catch (error) {
             if (!error.userMessage) error.userMessage = failureMessage;
@@ -408,6 +457,7 @@ window.ImageEditor = (() => {
                 controls.syncPresetMenu();
             }
             previewImage.src = view.url;
+            shownUrl = view.url;
             initCropper(record);
             if (cropper.ready) record.status = 'ready';
             controls.updateDownloadState();
@@ -443,34 +493,16 @@ window.ImageEditor = (() => {
         if (Boolean(record.removeBackground) === on) return;
         // Record an edit still in progress (such as a typed width) as its own step.
         commitEdit();
-        let view = on ? record.cutout : record.original;
+        // The brush paints on the cut-out, so it closes with removal; its
+        // strokes stay on the image for when removal is turned on again.
+        if (!on) endBrush();
+        let view = on ? freshCutout(record) : record.original;
         if (!view) {
-            // The picture stays on screen while the cut-out is made; the
-            // controls, undo and download wait for it.
             const requestId = imageRequestId;
-            const isStale = () => requestId !== imageRequestId;
-            const controller = new AbortController();
-            imageAbortController = controller;
-            controls.setToolControlsDisabled(true);
-            controls.updateDownloadState();
-            showLoading();
-            try {
-                view = on
-                    ? await loadCutout(record, controller.signal, isStale)
-                    : await loadOriginal(record, isStale);
-            } catch (error) {
-                if (isStale() || error.name === 'AbortError') return;
-                console.error('Error:', error);
-                alert(error.userMessage);
-            } finally {
-                if (!isStale()) {
-                    imageAbortController = null;
-                    hideLoading();
-                    controls.setToolControlsDisabled(false);
-                    controls.updateDownloadState();
-                }
-            }
-            if (isStale()) return;
+            view = await whileBusy((signal, isStale) =>
+                on ? loadCutout(record, signal, isStale) : loadOriginal(record, isStale),
+            );
+            if (requestId !== imageRequestId) return;
             if (!view) {
                 removeBgCheckbox.checked = Boolean(record.removeBackground);
                 return;
@@ -479,6 +511,39 @@ window.ImageEditor = (() => {
         record.removeBackground = on;
         showView(view);
         commitEdit();
+        controls.syncBrushPanel();
+        // The switch sits in the Cutout panel, so turning it on there opens the brush.
+        if (on && controls.brushToolActive()) openBrush();
+    }
+
+    // Run work on the open image while its picture stays on screen; the
+    // controls, undo and download wait for it. Resolves to the task's result,
+    // or null if it failed (after an alert) or the user moved to another image.
+    async function whileBusy(task) {
+        const requestId = imageRequestId;
+        const isStale = () => requestId !== imageRequestId;
+        const controller = new AbortController();
+        imageAbortController = controller;
+        controls.setToolControlsDisabled(true);
+        controls.updateDownloadState();
+        showLoading();
+        try {
+            const result = await task(controller.signal, isStale);
+            return isStale() ? null : result;
+        } catch (error) {
+            if (!isStale() && error.name !== 'AbortError') {
+                console.error('Error:', error);
+                alert(error.userMessage || 'Something went wrong. Please try again.');
+            }
+            return null;
+        } finally {
+            if (!isStale()) {
+                imageAbortController = null;
+                hideLoading();
+                controls.setToolControlsDisabled(false);
+                controls.updateDownloadState();
+            }
+        }
     }
 
     // Both pictures are already decoded, so the browser shows the new one at
@@ -486,7 +551,35 @@ window.ImageEditor = (() => {
     // same; a server cut-out of another size is stretched to the original's,
     // which it matches in shape, so the crop still covers the same area.
     function showView(view) {
+        if (view.url === shownUrl) return;
+        shownUrl = view.url;
         cropper.replace(view.url, true);
+    }
+
+    function brushVersion(record) {
+        return record.brush ? record.brush.version : 0;
+    }
+
+    // The cut-out, unless brush strokes have changed since it was made.
+    function freshCutout(record) {
+        return record.cutout && record.cutoutVersion === brushVersion(record)
+            ? record.cutout
+            : null;
+    }
+
+    // Show the picture that matches the image's removal setting, rebuilding the
+    // cut-out first if brush strokes have changed since it was made.
+    async function showCurrentPicture() {
+        const record = imageRecords.get(selectedFile);
+        if (!record || !cropper || !cropper.ready) return;
+        if (!record.removeBackground) {
+            if (record.original) showView(record.original);
+            return;
+        }
+        const view =
+            freshCutout(record) ||
+            (await whileBusy((signal, isStale) => loadCutout(record, signal, isStale)));
+        if (view && record.removeBackground && selectedFile === record.file) showView(view);
     }
 
     // Reset returns to the image as uploaded: background back, and crop,
@@ -495,6 +588,10 @@ window.ImageEditor = (() => {
     function resetImage() {
         const record = imageRecords.get(selectedFile);
         if (!record || !cropper) return;
+        // Brush edits are discarded too; turning removal on again rebuilds the
+        // cut-out from the stored mask, without uploading.
+        endBrush();
+        record.brush = null;
         record.removeBackground = false;
         removeBgCheckbox.checked = false;
         clearHistory();
@@ -525,8 +622,219 @@ window.ImageEditor = (() => {
         }
     }
 
+    // Why the brush is unavailable for a cut-out. With removal off the panel
+    // just hides the brush, as its switch sits right above.
+    function brushHint() {
+        const record = imageRecords.get(selectedFile);
+        if (record && record.removeBackground && record.removal && !record.removal.isMask)
+            return 'Touch-ups are not available for this file type.';
+        return '';
+    }
+
+    function appliedStrokes(record) {
+        return record.brush ? record.brush.strokes.slice(0, record.brush.applied) : [];
+    }
+
+    // The full-size original and coverage the brush paints on. They are large
+    // (four bytes a pixel each), so they exist only while needed.
+    async function loadBrushLayers(record) {
+        const original = await createImageBitmap(record.file, UPRIGHT);
+        let mask;
+        try {
+            mask = await createImageBitmap(record.removal.blob);
+            const coverage = ImageBrush.coverageFromMask(mask, original.width, original.height);
+            ImageBrush.paintStrokes(coverage, appliedStrokes(record));
+            return { original, mask, coverage };
+        } catch (error) {
+            original.close();
+            if (mask) mask.close();
+            throw error;
+        }
+    }
+
+    function releaseBrushLayers({ original, mask, coverage }) {
+        original.close();
+        mask.close();
+        coverage.width = coverage.height = 0;
+    }
+
+    async function renderBrushedCutout(record) {
+        const layers = await loadBrushLayers(record);
+        try {
+            return await canvasToBlob(ImageBrush.composite(layers.original, layers.coverage));
+        } finally {
+            releaseBrushLayers(layers);
+        }
+    }
+
+    // Open the brush view over the cropper for the current cut-out.
+    async function openBrush() {
+        const record = imageRecords.get(selectedFile);
+        if (
+            brushSession ||
+            !record ||
+            !record.removeBackground ||
+            brushHint() ||
+            !record.removal ||
+            !cropper ||
+            !cropper.ready ||
+            imageAbortController
+        )
+            return;
+        const session = { record, layers: null };
+        brushSession = session;
+        controls.syncBrushPanel();
+        const layers = await whileBusy(async () => {
+            try {
+                return await loadBrushLayers(record);
+            } catch (error) {
+                error.userMessage = 'Could not open the brush. Please try again.';
+                throw error;
+            }
+        });
+        if (brushSession !== session) {
+            if (layers) releaseBrushLayers(layers);
+            return;
+        }
+        if (!layers) {
+            brushSession = null;
+            controls.syncBrushPanel();
+            return;
+        }
+        session.layers = layers;
+        dropZone.classList.add('brushing');
+        brushView.show({ ...layers, background: selectedBackground }, cropperFrame(layers));
+    }
+
+    // How the crop view shows the image, relative to the brush view (which
+    // covers the whole stage): the image's centre, scale, rotation and flip,
+    // and the crop box. Cropper's canvas is the rotated image's bounding box,
+    // so its centre is the image's centre; imageData.width is the shown width
+    // before rotation.
+    function cropperFrame({ coverage }) {
+        if (!cropper || !cropper.ready) return null;
+        const canvasData = cropper.getCanvasData();
+        const imageData = cropper.getImageData();
+        if (!canvasData || !imageData || !imageData.width) return null;
+        const stage = dropZone.getBoundingClientRect();
+        const box = cropper.cropper ? cropper.cropper.getBoundingClientRect() : stage;
+        const left = box.left - stage.left;
+        const top = box.top - stage.top;
+        const cropBox = cropper.getCropBoxData();
+        return {
+            x: left + canvasData.left + canvasData.width / 2,
+            y: top + canvasData.top + canvasData.height / 2,
+            scale: imageData.width / coverage.width,
+            rotate: rotationAngle,
+            scaleX: horizontalScale,
+            scaleY: verticalScale,
+            crop:
+                cropBox && cropBox.width
+                    ? {
+                          left: left + cropBox.left,
+                          top: top + cropBox.top,
+                          width: cropBox.width,
+                          height: cropBox.height,
+                      }
+                    : null,
+        };
+    }
+
+    // Fit the crop view to a resized stage (a panel opening or closing, or the
+    // window resizing). Cropper's resize scales the picture with the stage's
+    // width, so a wider stage made it taller than the stage. Instead, keep
+    // its size and its place relative to the centre, and only shrink it if it
+    // would no longer fit (keeping any overflow from zooming in).
+    function resizeCropper() {
+        if (!cropper || !cropper.ready) return;
+        const before = cropper.getContainerData();
+        const canvasData = cropper.getCanvasData();
+        const cropBox = cropper.getCropBoxData();
+        cropper.resize();
+        if (!canvasData) return;
+        const after = cropper.getContainerData();
+        if (!before.width || (after.width === before.width && after.height === before.height)) return;
+        const boxes = cropBox.width ? [canvasData, cropBox] : [canvasData];
+        const oldX = before.width / 2;
+        const oldY = before.height / 2;
+        // How far the picture reaches from the centre, against the room there
+        // is (keeping a 25 px margin, as the first fit does): over 1 overflows.
+        const reach = (container) =>
+            Math.max(
+                ...boxes.map(({ left, width }) =>
+                    Math.max(Math.abs(left - oldX), Math.abs(left + width - oldX)) /
+                    Math.max(container.width / 2 - 25, 1),
+                ),
+                ...boxes.map(({ top, height }) =>
+                    Math.max(Math.abs(top - oldY), Math.abs(top + height - oldY)) /
+                    Math.max(container.height / 2 - 25, 1),
+                ),
+            );
+        const scale = Math.min(1, Math.max(reach(before), 1) / reach(after));
+        const place = ({ left, top, width, height }) => ({
+            left: after.width / 2 + (left - oldX) * scale,
+            top: after.height / 2 + (top - oldY) * scale,
+            width: width * scale,
+            height: height * scale,
+        });
+        cropper.setCanvasData(place(canvasData));
+        if (cropBox.width) cropper.setCropBoxData(place(cropBox));
+    }
+
+    function resizeBrush() {
+        if (brushSession && brushSession.layers)
+            brushView.resize(cropperFrame(brushSession.layers));
+    }
+
+    // Close the brush view without updating the cut-out.
+    function endBrush() {
+        const session = brushSession;
+        if (!session) return;
+        brushSession = null;
+        brushView.hide();
+        dropZone.classList.remove('brushing');
+        if (session.layers) releaseBrushLayers(session.layers);
+        controls.syncBrushPanel();
+    }
+
+    // Close the brush view and show the cut-out with its strokes, rebuilding it
+    // once here rather than after every stroke.
+    async function closeBrush() {
+        if (!brushSession) return;
+        endBrush();
+        await showCurrentPicture();
+    }
+
+    // A finished stroke is one undo step. It is already painted on the view's
+    // coverage; the image keeps the stroke itself, so undo can replay them.
+    function addStroke(stroke) {
+        if (!brushSession) return;
+        const { record } = brushSession;
+        const brush = record.brush || (record.brush = { strokes: [], applied: 0, version: 0 });
+        // A stroke after undo replaces the undone ones, as redo is cleared too.
+        brush.strokes.length = brush.applied;
+        brush.strokes.push(stroke);
+        brush.applied = brush.strokes.length;
+        brush.version = ++brushVersions;
+        commitEdit();
+    }
+
+    function repaintBrush() {
+        const { record, layers } = brushSession;
+        if (!layers) return;
+        ImageBrush.coverageFromMask(
+            layers.mask,
+            layers.original.width,
+            layers.original.height,
+            layers.coverage,
+        );
+        ImageBrush.paintStrokes(layers.coverage, appliedStrokes(record));
+        brushView.render();
+    }
+
     // Handle drag and drop functionality
     const dropZone = document.getElementById('dropZone');
+    const brushView = ImageBrush.createView(dropZone, addStroke);
 
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -575,6 +883,8 @@ window.ImageEditor = (() => {
 
     function selectFile(file, defaults = null) {
         if (file === selectedFile && cropper && cropper.ready) return Promise.resolve();
+        // Bake brush strokes into the cut-out first, so its saved export has them.
+        if (brushSession) return closeBrush().then(() => selectFile(file, defaults));
         saveCurrentImage();
         invalidateImageProcessing();
         selectedFile = file;
@@ -625,7 +935,12 @@ window.ImageEditor = (() => {
     // Each image keeps its own history of whole-editor snapshots. Undo restores
     // a snapshot onto the live cropper, so no image is reprocessed.
     function takeSnapshot() {
-        return { settings: captureImageSettings(), cropData: { ...cropper.getData() } };
+        const record = imageRecords.get(selectedFile);
+        return {
+            settings: captureImageSettings(),
+            cropData: { ...cropper.getData() },
+            strokes: record && record.brush ? record.brush.applied : 0,
+        };
     }
 
     function historyReady() {
@@ -647,21 +962,33 @@ window.ImageEditor = (() => {
         controls.updateDownloadState();
     }
 
-    function applySnapshot({ settings, cropData }) {
-        // A step that switched removal swaps the picture back as well. Both
-        // pictures exist, since each was on screen when its snapshot was taken.
+    function applySnapshot({ settings, cropData, strokes = 0 }) {
         const record = imageRecords.get(selectedFile);
-        const view = settings.removeBackground ? record.cutout : record.original;
-        if (view && settings.removeBackground !== Boolean(record.removeBackground)) {
-            record.removeBackground = settings.removeBackground;
-            removeBgCheckbox.checked = settings.removeBackground;
-            showView(view);
+        if (record.brush && record.brush.applied !== strokes) {
+            record.brush.applied = strokes;
+            record.brush.version = ++brushVersions;
+            if (brushSession) repaintBrush();
         }
+        // A step that switched removal swaps the picture back as well.
+        record.removeBackground = settings.removeBackground;
+        removeBgCheckbox.checked = settings.removeBackground;
         restoreImageSettings(settings);
         cropper.setAspectRatio(currentAspectRatio());
         controls.applyImageTransform();
         cropper.setData(cropData);
         controls.updateBackgroundColor(selectedBackground);
+        brushView.setBackground(selectedBackground);
+        if (!record.removeBackground) endBrush();
+        controls.syncBrushPanel();
+        // While brushing, the cut-out is rebuilt when the view closes.
+        if (record.removeBackground && controls.brushToolActive()) {
+            if (!brushSession)
+                openBrush().then(() => {
+                    if (!brushSession) showCurrentPicture();
+                });
+            return;
+        }
+        showCurrentPicture();
     }
 
     function stepHistory(from, to) {
@@ -689,6 +1016,13 @@ window.ImageEditor = (() => {
         if (!record || !cropper || !cropper.ready) return;
         record.settings = captureImageSettings();
         record.cropData = { ...cropper.getData() };
+        // A cut-out missing its latest strokes must not be exported; the image
+        // is then reported as needing to be opened again.
+        if (record.removeBackground && !freshCutout(record)) {
+            record.savedCanvas = null;
+            record.exportError = new Error('Brush edits are not applied yet.');
+            return;
+        }
         try {
             record.savedCanvas = createExportCanvas(cropper, record.settings);
             record.exportError = null;
@@ -956,6 +1290,10 @@ window.ImageEditor = (() => {
     async function downloadImages(allImages = false, format = PNG_EXPORT) {
         if (exportBusy || !cropper || !cropper.ready || imageAbortController)
             return;
+        if (brushSession) {
+            await closeBrush();
+            if (!cropper || !cropper.ready || imageAbortController) return;
+        }
         if (!EXPORT_EXTENSIONS[format.type]) format = PNG_EXPORT;
         exportBusy = true;
         controls.updateDownloadState();
@@ -1015,6 +1353,15 @@ window.ImageEditor = (() => {
         setRemoveBackground,
         applyRemovalToAll,
         resetImage,
+        openBrush,
+        closeBrush,
+        setBrushMode: (mode) => brushView.setMode(mode),
+        setBrushSize: (size) => brushView.setSize(size),
+        resizeBrush,
+        resizeCropper,
+        get brushHint() {
+            return brushHint();
+        },
         downloadImages,
         commitEdit,
         undo: () => stepHistory('past', 'future'),

@@ -390,6 +390,20 @@ body {
   background-color: #2980b9;
   transform: translateY(-2px);
 }
+.zoom-controls svg {
+  width: 22px;
+  height: 22px;
+}
+.zoom-controls button[aria-pressed="true"] {
+  background-color: #fff;
+  color: #2980b9;
+  box-shadow: inset 0 0 0 2px #3498db;
+}
+/* While panning, dragging anywhere on the image moves it. */
+.image-container.panning .cropper-face,
+.image-container.panning .cropper-drag-box {
+  cursor: grab;
+}
 
 /* Scrollbars */
 .image-container::-webkit-scrollbar {
@@ -1074,7 +1088,8 @@ input:focus-visible {
   cursor: pointer;
 }
 .transparent-swatch {
-  background: repeating-conic-gradient(#fff 0% 25%, #ddd 0% 50%) 50% / 10px 10px;
+  background: repeating-conic-gradient(var(--checker-light) 0% 25%, var(--checker-dark) 0% 50%) 50% /
+    10px 10px;
 }
 .white-swatch {
   background: #fff;
@@ -1197,6 +1212,79 @@ input:focus-visible {
   background: var(--selected);
   color: var(--selected-text);
   border-color: #80b4f3;
+}
+/* Cutout: the brush view covers the cropper while its panel is open. */
+.image-container.brushing {
+  outline: none;
+}
+.image-container.brushing .cropper-container {
+  visibility: hidden;
+}
+.brush-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  cursor: none;
+  /* Touch drags paint instead of scrolling the page. */
+  touch-action: none;
+}
+.brush-canvas.brush-panning {
+  cursor: grab;
+}
+.brush-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6;
+  box-sizing: border-box;
+  border: 1.5px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.brush-hint {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.brush-options {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.brush-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 24px;
+}
+.brush-modes button {
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.brush-modes button:hover {
+  background: var(--selected);
+}
+.brush-modes button[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--selected-text);
+  border-color: #80b4f3;
+}
+#brushSize {
+  width: 100%;
+  margin: 0;
+  min-height: 44px;
 }
 .rotation-angle-input {
   display: flex;

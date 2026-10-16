@@ -83,6 +83,15 @@
                         <path d="M6 3v13a2 2 0 0 0 2 2h13M3 6h13a2 2 0 0 1 2 2v13" />
                     </svg>
                 </button>
+                <button type="button" id="brushTool" class="tool-button" aria-label="Cutout" title="Cutout"
+                    aria-controls="brushPanel" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="6" cy="6" r="3" />
+                        <circle cx="6" cy="18" r="3" />
+                        <path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12" />
+                    </svg>
+                </button>
                 <button type="button" id="backgroundTool" class="tool-button" aria-label="Background" title="Background"
                     aria-controls="backgroundPanel" aria-expanded="false">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
@@ -232,8 +241,8 @@
                         </div>
                     </fieldset>
                 </section>
-                <section id="backgroundPanel" aria-labelledby="backgroundTool" hidden>
-                    <fieldset id="backgroundControls" class="tool-controls" disabled>
+                <section id="brushPanel" aria-labelledby="brushTool" hidden>
+                    <fieldset id="brushControls" class="tool-controls" disabled>
                         <div class="background-removal-row">
                             <div>
                                 <label for="removeBg">Remove background</label>
@@ -247,6 +256,22 @@
                             <input type="checkbox" id="removeBg" class="background-switch" role="switch"
                                 aria-describedby="removeBgHelp" />
                         </div>
+                        <p id="brushHint" class="brush-hint" hidden></p>
+                        <fieldset id="brushOptions" class="brush-options" aria-label="Brush" hidden>
+                            <div class="brush-modes">
+                                <button type="button" id="brushErase" aria-pressed="true">Erase</button>
+                                <button type="button" id="brushRestore" aria-pressed="false">Restore</button>
+                            </div>
+                            <div class="dimension-row">
+                                <label for="brushSize">Brush size</label>
+                                <span id="brushSizeValue">40 px</span>
+                            </div>
+                            <input type="range" id="brushSize" min="5" max="150" step="1" value="40" />
+                        </fieldset>
+                    </fieldset>
+                </section>
+                <section id="backgroundPanel" aria-labelledby="backgroundTool" hidden>
+                    <fieldset id="backgroundControls" class="tool-controls" disabled>
                         <fieldset class="background-replacements" id="backgroundReplacements">
                             <legend>Background Colour</legend>
                             <div class="background-swatches">
@@ -289,6 +314,13 @@
                 </div>
 
                 <div class="zoom-controls">
+                    <button type="button" id="panToggle" aria-pressed="false" aria-label="Pan" title="Pan">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M18 11V6a2 2 0 0 0-4 0M14 10V4a2 2 0 0 0-4 0v2M10 10.5V6a2 2 0 0 0-4 0v8" />
+                            <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+                        </svg>
+                    </button>
                     <button type="button" id="zoomOut" aria-label="Zoom out" title="Zoom Out">-</button>
                     <button type="button" id="zoomIn" aria-label="Zoom in" title="Zoom In">+</button>
                 </div>
@@ -308,6 +340,7 @@
 
         <script src="/static/vendor/cropper.min.js"></script>
         <script src="/static/vendor/jszip.min.js"></script>
+        <script src="/static/brush.js"></script>
         <script src="/static/editor.js"></script>
         <script src="/static/controls.js"></script>
     </div>
