@@ -10,7 +10,6 @@
         widthInput,
         heightInput,
         bgColorInput,
-        transparentBgButton,
         loadingOverlay,
         uploadPlaceholder,
     } = editor.elements;
@@ -257,7 +256,9 @@
         editor.commitEdit();
     });
 
-    function updateBackgroundColor(color) {
+    function updateBackgroundColor(background) {
+        // A blurred background is part of the picture, so the crop box shows checks.
+        const color = editor.fillColor(background);
         if (editor.cropper) {
             editor.cropper.options.fillColor = color;
             const viewBox = document.querySelector('.cropper-view-box');
@@ -307,6 +308,8 @@
         hintElement.textContent = hint;
         hintElement.hidden = !hint;
         document.getElementById('brushOptions').hidden = Boolean(hint) || !removeBgCheckbox.checked;
+        // Removal changes at the same points, which decides whether Blur is offered.
+        syncBlurOption();
     }
 
     const brushModes = { brushErase: 'erase', brushRestore: 'restore' };
@@ -383,34 +386,30 @@
             editor.commitEdit();
         });
 
-    function selectBackground(color, activeButton) {
-        editor.selectedBackground = color;
-        for (const id of ['transparentBg', 'whiteBg', 'blackBg', 'customBg']) {
-            document
-                .getElementById(id)
-                .setAttribute('aria-pressed', String(id === activeButton));
-        }
-        updateBackgroundColor(color);
+    const backgroundSwatches = {
+        transparentBg: 'transparent',
+        whiteBg: '#ffffff',
+        blackBg: '#000000',
+        blurBg: 'blur',
+    };
+
+    // Set the background, record it as an undo step unless `commit` is false
+    // (while a colour picker is still open), then show the matching picture.
+    function selectBackground(background, commit = true) {
+        editor.selectedBackground = background;
+        syncBackgroundControls();
+        updateBackgroundColor(background);
+        if (commit) editor.commitEdit();
+        editor.applyBackground();
     }
 
-    transparentBgButton.addEventListener('click', () => {
-        selectBackground('transparent', 'transparentBg');
-        editor.commitEdit();
-    });
-    document.getElementById('whiteBg').addEventListener('click', () => {
-        selectBackground('#ffffff', 'whiteBg');
-        editor.commitEdit();
-    });
-    document.getElementById('blackBg').addEventListener('click', () => {
-        selectBackground('#000000', 'blackBg');
-        editor.commitEdit();
-    });
+    for (const [id, background] of Object.entries(backgroundSwatches)) {
+        document.getElementById(id).addEventListener('click', () => selectBackground(background));
+    }
     document
         .getElementById('customBg')
         .addEventListener('click', () => bgColorInput.click());
-    function applyCustomBackground() {
-        document.getElementById('customBg').style.backgroundColor =
-            bgColorInput.value;
+    function applyCustomBackground(commit) {
         document.getElementById('customBg').style.color =
             parseInt(bgColorInput.value.slice(1, 3), 16) * 0.299 +
                 parseInt(bgColorInput.value.slice(3, 5), 16) * 0.587 +
@@ -418,32 +417,62 @@
             150
                 ? '#2c3e50'
                 : '#ffffff';
-        selectBackground(bgColorInput.value, 'customBg');
+        selectBackground(bgColorInput.value, commit);
     }
-    bgColorInput.addEventListener('input', applyCustomBackground);
+    bgColorInput.addEventListener('input', () => applyCustomBackground(false));
     // The picker fires input while browsing colours; record one step when it closes.
-    bgColorInput.addEventListener('change', () => {
-        applyCustomBackground();
+    bgColorInput.addEventListener('change', () => applyCustomBackground(true));
+
+    // Canvas blur needs Safari 18 or later; older browsers ignore the filter,
+    // so the Blur swatch is left out there.
+    const canvasBlur = (() => {
+        const context = document.createElement('canvas').getContext('2d');
+        if (!context) return false;
+        context.filter = 'blur(1px)';
+        return context.filter === 'blur(1px)';
+    })();
+    document.getElementById('blurBg').hidden = !canvasBlur;
+
+    const blurSlider = document.getElementById('blurStrength');
+    // Moving the slider shows quick previews; letting go makes the full-size
+    // picture as one undo step.
+    blurSlider.addEventListener('input', () => {
+        document.getElementById('blurStrengthValue').textContent = blurSlider.value;
+        editor.previewBlur(Number(blurSlider.value));
+    });
+    blurSlider.addEventListener('change', () => {
+        editor.blurStrength = Number(blurSlider.value);
         editor.commitEdit();
+        editor.applyBackground();
     });
 
+    // Blur is offered once the current image's background has been removed;
+    // its strength slider shows while it is chosen.
+    function syncBlurOption() {
+        const available = editor.blurAvailable;
+        document.getElementById('blurBg').disabled = !available;
+        document.getElementById('blurBg').title = available
+            ? 'Blur'
+            : 'Blur: turn on Remove background first';
+        document.getElementById('blurStrengthRow').hidden =
+            !available || editor.selectedBackground !== 'blur';
+    }
+
     function syncBackgroundControls() {
-        const color = editor.selectedBackground;
+        const background = editor.selectedBackground;
         const activeId =
-            color === 'transparent'
-                ? 'transparentBg'
-                : color === '#ffffff'
-                  ? 'whiteBg'
-                  : color === '#000000'
-                    ? 'blackBg'
-                    : 'customBg';
-        for (const id of ['transparentBg', 'whiteBg', 'blackBg', 'customBg']) {
+            Object.keys(backgroundSwatches).find((id) => backgroundSwatches[id] === background) ||
+            'customBg';
+        for (const id of [...Object.keys(backgroundSwatches), 'customBg']) {
             document
                 .getElementById(id)
                 .setAttribute('aria-pressed', String(id === activeId));
         }
         document.getElementById('customBg').style.backgroundColor =
             bgColorInput.value;
+        blurSlider.value = String(editor.blurStrength);
+        document.getElementById('blurStrengthValue').textContent = String(editor.blurStrength);
+        syncBlurOption();
     }
 
     const downloadTrigger = document.getElementById('downloadMenuButton');

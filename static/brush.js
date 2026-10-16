@@ -109,6 +109,11 @@ window.ImageBrush = (() => {
         // Holds the composited cut-out (and, while restoring, the erased-parts
         // guide) at screen size, so the background can be drawn underneath.
         const layer = document.createElement('canvas');
+        // The blurred original behind the cut-out, at screen size. Blurring is
+        // the slow part of a frame, so it is redrawn only when the view moves
+        // or the blur changes, not for every stroke.
+        const backdrop = document.createElement('canvas');
+        let backdropKey = '';
         let layers = null;
         let mode = 'erase';
         // The hand beside the zoom buttons: drags pan instead of painting.
@@ -189,13 +194,23 @@ window.ImageBrush = (() => {
             // (which only zooms and pans, as it is never rotated).
             const view = multiply([ratio, 0, 0, ratio, 0, 0], imageToView());
             const stage = [ratio * zoom, 0, 0, ratio * zoom, ratio * panX, ratio * panY];
-            const { original, coverage, background } = layers;
+            const { original, coverage, background, blur } = layers;
             const context = canvas.getContext('2d');
             context.setTransform(1, 0, 0, 1, 0, 0);
             context.clearRect(0, 0, pixelWidth, pixelHeight);
-            // The background fills the crop box, as in the crop view; a
-            // transparent one lets the container's checks show through.
-            if (background !== 'transparent') {
+            if (background === 'blur') {
+                // Without a radius (blur unavailable) it shows as transparent.
+                if (blur > 0) {
+                    const key = `${view.join()}|${blur}|${pixelWidth}x${pixelHeight}`;
+                    if (key !== backdropKey) {
+                        drawBackdrop(view, original, blur, pixelWidth, pixelHeight);
+                        backdropKey = key;
+                    }
+                    context.drawImage(backdrop, 0, 0);
+                }
+            } else if (background !== 'transparent') {
+                // A colour fills the crop box, as in the crop view; a
+                // transparent one lets the container's checks show through.
                 context.setTransform(...stage);
                 context.fillStyle = background;
                 context.fillRect(crop.left, crop.top, crop.width, crop.height);
@@ -228,6 +243,30 @@ window.ImageBrush = (() => {
             context.setTransform(...stage);
             context.rect(crop.left, crop.top, crop.width, crop.height);
             context.fill('evenodd');
+        }
+
+        // The original, blurred by `blur` image pixels, over the image's area
+        // only (as the blurred picture covers it in the crop view). As in the
+        // editor's renderBlurred, it is drawn a little larger to keep the edges
+        // solid. The filter ignores the transform, so its radius is scaled to
+        // device pixels here.
+        function drawBackdrop(view, original, blur, width, height) {
+            backdrop.width = width;
+            backdrop.height = height;
+            const context = backdrop.getContext('2d');
+            context.setTransform(...view);
+            context.beginPath();
+            context.rect(0, 0, original.width, original.height);
+            context.clip();
+            context.filter = `blur(${blur * Math.hypot(view[0], view[1])}px)`;
+            const margin = blur * 3;
+            context.drawImage(
+                original,
+                -margin,
+                -margin,
+                original.width + 2 * margin,
+                original.height + 2 * margin,
+            );
         }
 
         // Draw the original on the screen-sized layer, then combine it with
@@ -353,6 +392,8 @@ window.ImageBrush = (() => {
                 cursor.hidden = true;
                 // Release the screen-sized buffers.
                 canvas.width = canvas.height = layer.width = layer.height = 0;
+                backdrop.width = backdrop.height = 0;
+                backdropKey = '';
             },
             render: requestRender,
             resize(placement) {
@@ -360,9 +401,11 @@ window.ImageBrush = (() => {
                 fit(placement);
                 requestRender();
             },
-            setBackground(color) {
+            // `blur` is the blur radius in image pixels, used when `background` is 'blur'.
+            setBackground(background, blur) {
                 if (!layers) return;
-                layers.background = color;
+                layers.background = background;
+                layers.blur = blur;
                 requestRender();
             },
             setMode(next) {

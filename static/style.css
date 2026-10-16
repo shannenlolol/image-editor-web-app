@@ -1072,16 +1072,17 @@ input:focus-visible {
   color: var(--muted);
 }
 .background-swatches {
-  display: flex;
-  flex-wrap: wrap;
+  /* Five swatches in one row: they shrink a little to fit the panel. */
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 44px));
   gap: 6px;
 }
 .background-swatch {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 100%;
+  aspect-ratio: 1;
   padding: 0;
   border: 2px solid var(--input-border);
   border-radius: 50%;
@@ -1090,6 +1091,18 @@ input:focus-visible {
 .transparent-swatch {
   background: repeating-conic-gradient(var(--checker-light) 0% 25%, var(--checker-dark) 0% 50%) 50% /
     10px 10px;
+}
+/* A soft-focus blob, standing for the photo's own background blurred. */
+.blur-swatch {
+  background: radial-gradient(circle at 35% 35%, #cfe3f5, #6f9cc6 45%, #2c4a66 80%);
+  box-shadow: inset 0 0 6px 3px rgba(255, 255, 255, 0.55);
+}
+.background-swatch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.blur-strength {
+  margin-top: 24px;
 }
 .white-swatch {
   background: #fff;
@@ -1281,7 +1294,8 @@ input:focus-visible {
   color: var(--selected-text);
   border-color: #80b4f3;
 }
-#brushSize {
+#brushSize,
+#blurStrength {
   width: 100%;
   margin: 0;
   min-height: 44px;

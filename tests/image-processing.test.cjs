@@ -2441,3 +2441,129 @@ test('switching images or downloading while brushing bakes the strokes first', a
     assert.equal(e.downloads.length, 1);
     assert.equal(e.canvases.at(-1).draws[0].source.source, 'brushed again');
 });
+
+// Choosing Blur decodes the cut-out to draw over the blurred original, then
+// encodes and decodes the result.
+async function chooseBlur(e, result = { name: 'blurred', width: 4, height: 4 }) {
+    e.element('blurBg').click();
+    await flush();
+    await e.decode();
+    await finishCutout(e, result);
+}
+
+test('Blur is offered once the background is removed, and shows the cut-out over the blurred original', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png', width: 4, height: 4 }, false);
+    await e.decode();
+    assert.equal(e.element('blurBg').disabled, true);
+    await e.toggle(true);
+    await e.respond(e.requests[0], { width: 4, height: 4 });
+    await finishCutout(e, { name: 'cutout', width: 4, height: 4 });
+    assert.equal(e.element('blurBg').disabled, false);
+    assert.equal(e.element('blurStrengthRow').hidden, true);
+    const cutoutUrl = e.element('image').src;
+    await chooseBlur(e);
+    assert.equal(e.visibleImage().name, 'blurred');
+    assert.equal(e.element('blurBg')['aria-pressed'], 'true');
+    assert.equal(e.element('blurStrengthRow').hidden, false);
+    // The blur is in the picture, so the crop box fills nothing.
+    assert.equal(e.cropper().options.fillColor, 'transparent');
+    // The original, drawn larger by three blur radii (8 thousandths of the
+    // longer side each), then the cut-out over it.
+    const [background, subject] = e.exports.at(-1).canvas.draws;
+    const margin = 3 * ((8 * 4) / 1000);
+    assertNear(background.position, [-margin, -margin, 4 + 2 * margin, 4 + 2 * margin]);
+    assert.equal(subject.source.src, cutoutUrl);
+    assert.deepEqual(subject.position, [0, 0, 4, 4]);
+    // Undo and redo swap pictures without making them again.
+    const exports = e.exports.length;
+    e.element('undoButton').click();
+    await flush();
+    assert.equal(e.visibleImage().name, 'cutout');
+    assert.equal(e.element('blurStrengthRow').hidden, true);
+    e.element('redoButton').click();
+    await flush();
+    assert.equal(e.visibleImage().name, 'blurred');
+    assert.equal(e.exports.length, exports);
+});
+
+test('the blur strength slider previews small versions, then makes one full-size step', async () => {
+    const e = await cutoutImage();
+    await chooseBlur(e);
+    const slider = e.element('blurStrength');
+    slider.value = '16';
+    slider.dispatchEvent(new Event('input'));
+    await flush();
+    await e.decode();
+    const preview = e.exports.at(-1);
+    assert.equal(preview.type, 'image/jpeg');
+    preview({ name: 'preview' });
+    await flush();
+    assert.equal(e.visibleImage().name, 'preview');
+    assert.equal(e.element('blurStrengthValue').textContent, '16');
+    const previewUrl = e.element('image').src;
+    slider.dispatchEvent(new Event('change'));
+    await flush();
+    await e.decode();
+    await finishCutout(e, { name: 'stronger', width: 4, height: 4 });
+    assert.equal(e.visibleImage().name, 'stronger');
+    assert.equal(e.revoked.has(previewUrl), true);
+    const margin = 3 * ((16 * 4) / 1000);
+    assertNear(e.exports.at(-1).canvas.draws[0].position.slice(0, 1), [-margin]);
+    // Undo goes back to strength 8, which has to be made again.
+    e.element('undoButton').click();
+    await flush();
+    await e.decode();
+    await finishCutout(e, { name: 'blurred again', width: 4, height: 4 });
+    assert.equal(e.visibleImage().name, 'blurred again');
+    assert.equal(slider.value, '8');
+});
+
+test('turning removal off with Blur chosen shows the original, and on again reuses the blur', async () => {
+    const e = await cutoutImage();
+    await chooseBlur(e);
+    const exports = e.exports.length;
+    await e.toggle(false);
+    await e.decode();
+    assert.equal(e.visibleImage().name, 'A.png');
+    assert.equal(e.element('blurBg').disabled, true);
+    assert.equal(e.element('blurStrengthRow').hidden, true);
+    await e.toggle(true);
+    assert.equal(e.visibleImage().name, 'blurred');
+    assert.equal(e.exports.length, exports);
+});
+
+test('downloading with Blur exports the blurred picture with no fill colour', async () => {
+    const e = await cutoutImage();
+    await chooseBlur(e);
+    e.download(false);
+    await flush();
+    const [{ source }] = e.exports.at(-1).canvas.draws;
+    assert.equal(source.source, 'blurred');
+    assert.equal(source.options.fillColor, 'transparent');
+});
+
+test('the brush view draws the blurred original behind the cut-out', async () => {
+    const e = await cutoutImage();
+    await chooseBlur(e);
+    await openBrushTool(e);
+    assert.equal(brushCanvas(e).hidden, false);
+    // The backdrop is clipped to the image and drawn from the full-size original.
+    const backdrop = e.canvases.find((canvas) => canvas.ops.some(([op]) => op === 'clip'));
+    assert.ok(backdrop);
+    assert.equal(backdrop.draws.at(-1).source.width, 4);
+    assert.ok(brushCanvas(e).draws.some(({ source }) => source === backdrop));
+});
+
+test('if blurring fails, the cut-out stays with a transparent background', async () => {
+    const e = await cutoutImage();
+    e.element('blurBg').click();
+    await flush();
+    e.decodes.at(-1).reject(new Error('EncodingError'));
+    await flush();
+    assert.match(e.alerts.at(-1), /Could not blur the background/);
+    assert.equal(e.visibleImage().name, 'cutout');
+    assert.equal(e.element('transparentBg')['aria-pressed'], 'true');
+    assert.equal(e.cropper().options.fillColor, 'transparent');
+    assert.equal(e.loading(), false);
+});

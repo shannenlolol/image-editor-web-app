@@ -19,7 +19,10 @@ window.ImageEditor = (() => {
     let shownUrl = null;
     let selectedFileName = '';
     let sourceDimensions = null;
+    // A colour, 'transparent', or 'blur' (the photo's own background, blurred
+    // behind the cut-out; see loadBlurred).
     let selectedBackground = 'transparent';
+    let blurStrength = 8;
     let rotationAngle = 0;
     let horizontalScale = 1;
     let verticalScale = 1;
@@ -35,7 +38,6 @@ window.ImageEditor = (() => {
     const widthInput = document.getElementById('widthInput');
     const heightInput = document.getElementById('heightInput');
     const bgColorInput = document.getElementById('bgColor');
-    const transparentBgButton = document.getElementById('transparentBg');
     const loadingOverlay = document.getElementById('loadingOverlay');
     const uploadPlaceholder = document.getElementById('uploadPlaceholder');
 
@@ -84,7 +86,7 @@ window.ImageEditor = (() => {
             dragMode: 'crop',
             // The hand button switches modes, so a double-click must not do it unseen.
             toggleDragModeOnDblclick: false,
-            fillColor: selectedBackground,
+            fillColor: fillColor(selectedBackground),
             minContainerWidth: 0,
             minContainerHeight: 0,
             minCropBoxWidth: 10,
@@ -207,6 +209,7 @@ window.ImageEditor = (() => {
 
     function invalidateImageProcessing() {
         endBrush();
+        endBlurPreview();
         shownUrl = null;
         controls.setToolControlsDisabled(true);
         const previous = imageRecords.get(selectedFile);
@@ -409,6 +412,7 @@ window.ImageEditor = (() => {
             if (record.removeBackground) {
                 try {
                     view = await loadCutout(record, controller.signal, isStale);
+                    if (view && wantsBlur(record)) view = await loadBlurredOrCutout(record, isStale);
                 } catch (error) {
                     if (isStale() || error.name === 'AbortError') return;
                     // The original can still be edited, so turn removal off
@@ -496,12 +500,10 @@ window.ImageEditor = (() => {
         // The brush paints on the cut-out, so it closes with removal; its
         // strokes stay on the image for when removal is turned on again.
         if (!on) endBrush();
-        let view = on ? freshCutout(record) : record.original;
+        let view = freshView(record, on);
         if (!view) {
             const requestId = imageRequestId;
-            view = await whileBusy((signal, isStale) =>
-                on ? loadCutout(record, signal, isStale) : loadOriginal(record, isStale),
-            );
+            view = await whileBusy((signal, isStale) => loadView(record, on, signal, isStale));
             if (requestId !== imageRequestId) return;
             if (!view) {
                 removeBgCheckbox.checked = Boolean(record.removeBackground);
@@ -567,19 +569,213 @@ window.ImageEditor = (() => {
             : null;
     }
 
-    // Show the picture that matches the image's removal setting, rebuilding the
-    // cut-out first if brush strokes have changed since it was made.
+    // Where a colour is needed (the crop box, the export's fill), a blurred
+    // background fills nothing: the blur is part of the picture itself.
+    function fillColor(background) {
+        return background === 'blur' ? 'transparent' : background;
+    }
+
+    // Blurring needs the photo itself and its mask, so it waits for the first
+    // removal, and isn't offered for files only the server could decode (it
+    // sends back a finished cut-out instead).
+    function blurAvailable(record) {
+        return Boolean(record && record.removal && record.removal.isMask);
+    }
+
+    function wantsBlur(record, on = record && record.removeBackground) {
+        return Boolean(on) && selectedBackground === 'blur' && blurAvailable(record);
+    }
+
+    // The blur's radius in pixels of a picture this size: a share of its
+    // longer side, so it looks the same at any resolution.
+    function blurRadius(width, height, strength = blurStrength) {
+        return (strength * Math.max(width, height)) / 1000;
+    }
+
+    // Which brush strokes and strength a blurred picture was made with.
+    function blurKey(record) {
+        return `${brushVersion(record)}:${blurStrength}`;
+    }
+
+    // The picture the image should show (its original, cut-out, or cut-out
+    // over the blurred original) if it is already made and up to date.
+    function freshView(record, on = record.removeBackground) {
+        if (!on) return record.original;
+        if (!wantsBlur(record, on)) return freshCutout(record);
+        return record.blurred && record.blurredKey === blurKey(record) && freshCutout(record)
+            ? record.blurred
+            : null;
+    }
+
+    async function loadView(record, on, signal, isStale) {
+        if (!on) return loadOriginal(record, isStale);
+        const cutout = await loadCutout(record, signal, isStale);
+        return cutout && wantsBlur(record, on) ? loadBlurredOrCutout(record, isStale) : cutout;
+    }
+
+    // The cut-out over its own original, blurred: a "portrait mode" look. It
+    // is made at full size and shown like the cut-out, so crop, rotation and
+    // download need nothing special.
+    async function loadBlurred(record, isStale) {
+        const key = blurKey(record);
+        if (record.blurred && record.blurredKey === key) return record.blurred;
+        const sources = await loadBlurSources(record);
+        let canvas;
+        try {
+            canvas = renderBlurred(sources, blurStrength);
+        } finally {
+            releaseBlurSources(sources);
+        }
+        if (isStale()) return null;
+        const view = await decodeView(await canvasToBlob(canvas), isStale);
+        if (view) {
+            if (record.blurred) URL.revokeObjectURL(record.blurred.url);
+            record.blurred = view;
+            record.blurredKey = key;
+        }
+        return view;
+    }
+
+    // If blurring fails (such as running out of memory on a huge photo), keep
+    // the cut-out and fall back to a transparent background.
+    async function loadBlurredOrCutout(record, isStale) {
+        try {
+            return await loadBlurred(record, isStale);
+        } catch (error) {
+            if (isStale()) return null;
+            console.error('Error:', error);
+            alert('Could not blur the background, so it is transparent instead.');
+            selectedBackground = 'transparent';
+            controls.syncBackgroundControls();
+            controls.updateBackgroundColor(selectedBackground);
+            return record.cutout;
+        }
+    }
+
+    // The upright original and the decoded cut-out. For quick previews the
+    // original is shrunk onto a canvas so its longer side is at most `maxSide`.
+    async function loadBlurSources(record, maxSide = Infinity) {
+        const original = await createImageBitmap(record.file, UPRIGHT);
+        try {
+            const cutout = new Image();
+            cutout.src = record.cutout.url;
+            await cutout.decode();
+            const scale = Math.min(1, maxSide / Math.max(original.width, original.height));
+            if (scale === 1) return { original, cutout };
+            const small = document.createElement('canvas');
+            small.width = Math.round(original.width * scale);
+            small.height = Math.round(original.height * scale);
+            const context = small.getContext('2d');
+            if (!context) throw new Error('Could not create the preview canvas.');
+            context.drawImage(original, 0, 0, small.width, small.height);
+            original.close();
+            return { original: small, cutout };
+        } catch (error) {
+            original.close();
+            throw error;
+        }
+    }
+
+    function releaseBlurSources({ original }) {
+        if (original.close) original.close();
+        else original.width = original.height = 0;
+    }
+
+    function renderBlurred({ original, cutout }, strength) {
+        const { width, height } = original;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Could not create the blur canvas.');
+        const radius = blurRadius(width, height, strength);
+        // A blur pulls in transparency from beyond the edges. Drawing the photo
+        // a little larger keeps them solid: a Gaussian blur reaches about three
+        // times its radius, and being blurred, the slight stretch can't be seen.
+        const margin = radius * 3;
+        context.filter = `blur(${radius}px)`;
+        context.drawImage(original, -margin, -margin, width + 2 * margin, height + 2 * margin);
+        context.filter = 'none';
+        context.drawImage(cutout, 0, 0, width, height);
+        return canvas;
+    }
+
+    // While the strength slider moves, show small quick versions; the full-size
+    // one is made when it is let go. `generation` drops versions that finish
+    // after the full-size one has taken over.
+    const blurPreview = { record: null, sources: null, busy: false, again: false, urls: [], generation: 0 };
+
+    async function previewBlur(strength) {
+        blurStrength = strength;
+        const record = imageRecords.get(selectedFile);
+        if (brushSession) {
+            brushView.setBackground(selectedBackground, brushBlurRadius());
+            return;
+        }
+        if (!wantsBlur(record) || !freshCutout(record) || !cropper || !cropper.ready || imageAbortController)
+            return;
+        if (blurPreview.busy) {
+            blurPreview.again = true;
+            return;
+        }
+        blurPreview.busy = true;
+        try {
+            if (blurPreview.record !== record) {
+                endBlurPreview();
+                const generation = blurPreview.generation;
+                const sources = await loadBlurSources(record, 1024);
+                if (generation !== blurPreview.generation) {
+                    releaseBlurSources(sources);
+                    return;
+                }
+                blurPreview.record = record;
+                blurPreview.sources = sources;
+            }
+            const generation = blurPreview.generation;
+            do {
+                blurPreview.again = false;
+                const canvas = renderBlurred(blurPreview.sources, blurStrength);
+                // The preview is opaque, so JPEG encodes it faster than PNG.
+                const blob = await canvasToBlob(canvas, { type: 'image/jpeg', quality: 0.85 });
+                if (generation !== blurPreview.generation || selectedFile !== record.file) return;
+                const url = URL.createObjectURL(blob);
+                blurPreview.urls.push(url);
+                showView({ url });
+            } while (blurPreview.again);
+        } catch (error) {
+            console.error('Error:', error);
+        } finally {
+            blurPreview.busy = false;
+        }
+    }
+
+    function endBlurPreview() {
+        blurPreview.generation += 1;
+        if (blurPreview.sources) releaseBlurSources(blurPreview.sources);
+        for (const url of blurPreview.urls) URL.revokeObjectURL(url);
+        Object.assign(blurPreview, { record: null, sources: null, again: false, urls: [] });
+    }
+
+    // After the background or blur strength changes: show the matching picture
+    // (making a blurred one if needed) and repaint the brush view. While
+    // brushing, the picture behind is updated when the brush closes.
+    async function applyBackground() {
+        brushView.setBackground(selectedBackground, brushBlurRadius());
+        if (!brushSession) await showCurrentPicture();
+        endBlurPreview();
+    }
+
+    // Show the picture that matches the image's settings, making it first if
+    // needed (a cut-out after brush strokes, or a blurred background).
     async function showCurrentPicture() {
         const record = imageRecords.get(selectedFile);
         if (!record || !cropper || !cropper.ready) return;
-        if (!record.removeBackground) {
-            if (record.original) showView(record.original);
-            return;
-        }
+        const on = Boolean(record.removeBackground);
         const view =
-            freshCutout(record) ||
-            (await whileBusy((signal, isStale) => loadCutout(record, signal, isStale)));
-        if (view && record.removeBackground && selectedFile === record.file) showView(view);
+            freshView(record, on) ||
+            (await whileBusy((signal, isStale) => loadView(record, on, signal, isStale)));
+        if (view && Boolean(record.removeBackground) === on && selectedFile === record.file)
+            showView(view);
     }
 
     // Reset returns to the image as uploaded: background back, and crop,
@@ -703,7 +899,10 @@ window.ImageEditor = (() => {
         }
         session.layers = layers;
         dropZone.classList.add('brushing');
-        brushView.show({ ...layers, background: selectedBackground }, cropperFrame(layers));
+        brushView.show(
+            { ...layers, background: selectedBackground, blur: brushBlurRadius(layers) },
+            cropperFrame(layers),
+        );
     }
 
     // How the crop view shows the image, relative to the brush view (which
@@ -779,6 +978,13 @@ window.ImageEditor = (() => {
         });
         cropper.setCanvasData(place(canvasData));
         if (cropBox.width) cropper.setCropBoxData(place(cropBox));
+    }
+
+    // The brush view's blur radius in image pixels, or 0 for no blur.
+    function brushBlurRadius(layers = brushSession && brushSession.layers) {
+        const record = imageRecords.get(selectedFile);
+        if (!layers || !wantsBlur(record)) return 0;
+        return blurRadius(layers.original.width, layers.original.height);
     }
 
     function resizeBrush() {
@@ -910,6 +1116,7 @@ window.ImageEditor = (() => {
             sourceDimensions,
             removeBackground: Boolean(imageRecords.get(selectedFile)?.removeBackground),
             background: selectedBackground,
+            blurStrength,
             customColor: bgColorInput.value,
             rotation: rotationAngle,
             horizontalScale,
@@ -923,6 +1130,7 @@ window.ImageEditor = (() => {
         document.getElementById('aspectRatioPreset').value = settings.preset;
         sourceDimensions = settings.sourceDimensions;
         selectedBackground = settings.background;
+        blurStrength = settings.blurStrength;
         bgColorInput.value = settings.customColor;
         rotationAngle = settings.rotation;
         horizontalScale = settings.horizontalScale;
@@ -977,7 +1185,7 @@ window.ImageEditor = (() => {
         controls.applyImageTransform();
         cropper.setData(cropData);
         controls.updateBackgroundColor(selectedBackground);
-        brushView.setBackground(selectedBackground);
+        brushView.setBackground(selectedBackground, brushBlurRadius());
         if (!record.removeBackground) endBrush();
         controls.syncBrushPanel();
         // While brushing, the cut-out is rebuilt when the view closes.
@@ -1016,11 +1224,11 @@ window.ImageEditor = (() => {
         if (!record || !cropper || !cropper.ready) return;
         record.settings = captureImageSettings();
         record.cropData = { ...cropper.getData() };
-        // A cut-out missing its latest strokes must not be exported; the image
-        // is then reported as needing to be opened again.
-        if (record.removeBackground && !freshCutout(record)) {
+        // A picture missing its latest strokes or blur must not be exported;
+        // the image is then reported as needing to be opened again.
+        if (!freshView(record)) {
             record.savedCanvas = null;
-            record.exportError = new Error('Brush edits are not applied yet.');
+            record.exportError = new Error('The latest edits are not applied yet.');
             return;
         }
         try {
@@ -1079,7 +1287,7 @@ window.ImageEditor = (() => {
         thumbnail.remove();
         imageRecords.delete(file);
         URL.revokeObjectURL(thumbnailImage.src);
-        for (const view of [record?.original, record?.cutout])
+        for (const view of [record?.original, record?.cutout, record?.blurred])
             if (view) URL.revokeObjectURL(view.url);
         updateBatchEmptyState();
         if (
@@ -1180,7 +1388,7 @@ window.ImageEditor = (() => {
         const croppedCanvas = sourceCropper.getCroppedCanvas({
             width: scaledWidth,
             height: scaledHeight,
-            fillColor: settings.background,
+            fillColor: fillColor(settings.background),
         });
         if (!croppedCanvas) throw new Error('Could not render the image.');
         const canvas = document.createElement('canvas');
@@ -1188,7 +1396,7 @@ window.ImageEditor = (() => {
         canvas.height = height;
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Could not create the download canvas.');
-        if (settings.background !== 'transparent') {
+        if (fillColor(settings.background) !== 'transparent') {
             context.fillStyle = settings.background;
             context.fillRect(0, 0, width, height);
         }
@@ -1362,6 +1570,20 @@ window.ImageEditor = (() => {
         get brushHint() {
             return brushHint();
         },
+        previewBlur,
+        applyBackground,
+        fillColor,
+        // Whether the Blur background can be chosen for the current image.
+        get blurAvailable() {
+            const record = imageRecords.get(selectedFile);
+            return Boolean(record && record.removeBackground && blurAvailable(record));
+        },
+        get blurStrength() {
+            return blurStrength;
+        },
+        set blurStrength(value) {
+            blurStrength = value;
+        },
         downloadImages,
         commitEdit,
         undo: () => stepHistory('past', 'future'),
@@ -1390,7 +1612,6 @@ window.ImageEditor = (() => {
             widthInput,
             heightInput,
             bgColorInput,
-            transparentBgButton,
             loadingOverlay,
             uploadPlaceholder,
         },

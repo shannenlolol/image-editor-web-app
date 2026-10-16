@@ -273,7 +273,7 @@
                 <section id="backgroundPanel" aria-labelledby="backgroundTool" hidden>
                     <fieldset id="backgroundControls" class="tool-controls" disabled>
                         <fieldset class="background-replacements" id="backgroundReplacements">
-                            <legend>Background Colour</legend>
+                            <legend>Background</legend>
                             <div class="background-swatches">
                                 <button type="button" id="transparentBg" class="background-swatch transparent-swatch"
                                     aria-label="Transparent background" aria-pressed="true"
@@ -282,6 +282,8 @@
                                     aria-label="White background" aria-pressed="false" title="White"></button>
                                 <button type="button" id="blackBg" class="background-swatch black-swatch"
                                     aria-label="Black background" aria-pressed="false" title="Black"></button>
+                                <button type="button" id="blurBg" class="background-swatch blur-swatch"
+                                    aria-label="Blurred background" aria-pressed="false" title="Blur" disabled></button>
                                 <div class="custom-background">
                                     <button type="button" id="customBg" class="background-swatch custom-swatch"
                                         aria-label="Custom background colour" aria-pressed="false"
@@ -293,6 +295,13 @@
                                 </div>
                             </div>
                         </fieldset>
+                        <div class="blur-strength" id="blurStrengthRow" hidden>
+                            <div class="dimension-row">
+                                <label for="blurStrength">Blur strength</label>
+                                <span id="blurStrengthValue">8</span>
+                            </div>
+                            <input type="range" id="blurStrength" min="1" max="20" step="1" value="8" />
+                        </div>
                     </fieldset>
                 </section>
             </aside>
