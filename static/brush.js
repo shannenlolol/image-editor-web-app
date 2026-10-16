@@ -111,6 +111,8 @@ window.ImageBrush = (() => {
         const layer = document.createElement('canvas');
         let layers = null;
         let mode = 'erase';
+        // The hand beside the zoom buttons: drags pan instead of painting.
+        let panning = false;
         let size = 40; // On-screen diameter in CSS pixels.
         // `base` maps image pixels to view pixels as the crop view shows the
         // image (position, scale, rotation and flip), and `crop` is the crop
@@ -256,7 +258,7 @@ window.ImageBrush = (() => {
 
         function moveCursor(event) {
             const rect = canvas.getBoundingClientRect();
-            cursor.hidden = mode === 'move';
+            cursor.hidden = panning;
             cursor.style.width = cursor.style.height = `${size}px`;
             cursor.style.transform = `translate(${event.clientX - rect.left - size / 2}px, ${
                 event.clientY - rect.top - size / 2
@@ -277,7 +279,7 @@ window.ImageBrush = (() => {
             event.preventDefault();
             if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
             // The middle button pans in any mode, as in most image editors.
-            if (mode === 'move' || event.button === 1) {
+            if (panning || event.button === 1) {
                 pan = { id: event.pointerId, x: event.clientX - panX, y: event.clientY - panY };
                 return;
             }
@@ -365,9 +367,12 @@ window.ImageBrush = (() => {
             },
             setMode(next) {
                 mode = next;
-                canvas.classList.toggle('brush-move', mode === 'move');
-                cursor.hidden = true;
                 requestRender();
+            },
+            setPanning(next) {
+                panning = next;
+                canvas.classList.toggle('brush-panning', panning);
+                cursor.hidden = true;
             },
             setSize(next) {
                 size = next;

@@ -80,7 +80,8 @@ window.ImageEditor = (() => {
             cropBoxResizable: true,
             guides: true,
             dragMode: 'crop',
-            toggleDragModeOnDblclick: true,
+            // The hand button switches modes, so a double-click must not do it unseen.
+            toggleDragModeOnDblclick: false,
             fillColor: selectedBackground,
             minContainerWidth: 0,
             minContainerHeight: 0,
@@ -105,6 +106,7 @@ window.ImageEditor = (() => {
                 record.status = 'ready';
                 controls.setToolControlsDisabled(false);
                 controls.updateBackgroundColor(selectedBackground);
+                applyPanning();
                 const cropBox = document.querySelector('.cropper-crop-box');
                 if (cropBox) {
                     cropBox.style.cursor = 'move';
@@ -167,6 +169,28 @@ window.ImageEditor = (() => {
 
         cropper = new Cropper(previewImage, options);
     }
+
+    // The hand beside the zoom buttons pans the crop view and the brush view.
+    let panning = false;
+    const panToggle = document.getElementById('panToggle');
+
+    function applyPanning() {
+        panToggle.setAttribute('aria-pressed', String(panning));
+        dropZone.classList.toggle('panning', panning);
+        brushView.setPanning(panning);
+        if (!cropper || !cropper.ready) return;
+        cropper.setDragMode(panning ? 'move' : 'crop');
+        // Cropper's move mode still moves the crop box when dragged inside it,
+        // which usually covers most of the view. Point the crop box's face at
+        // the image instead ('all' is Cropper's own action for moving the box).
+        const face = document.querySelector('.cropper-face');
+        if (face) face.dataset.cropperAction = panning ? 'move' : 'all';
+    }
+
+    panToggle.addEventListener('click', () => {
+        panning = !panning;
+        applyPanning();
+    });
 
     // Register zoom handlers once, independent of cropper recreation.
     // While the brush view is open, the zoom buttons zoom it instead.

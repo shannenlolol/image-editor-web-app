@@ -37,6 +37,7 @@ function editor({ webpEncoding = true } = {}) {
             this.style = {};
             this.children = [];
             this.value = '';
+            this.dataset = {};
             const classes = new Set();
             this.classList = {
                 add: (name) => classes.add(name),
@@ -128,6 +129,7 @@ function editor({ webpEncoding = true } = {}) {
                 const knownSelectors = [
                     '.cropper-view-box',
                     '.cropper-crop-box',
+                    '.cropper-face',
                     '.image-container',
                 ];
                 return knownSelectors.includes(selector) ? element(selector) : null;
@@ -245,6 +247,9 @@ function editor({ webpEncoding = true } = {}) {
             }
             setAspectRatio(ratio) {
                 this.options.aspectRatio = ratio;
+            }
+            setDragMode(mode) {
+                this.options.dragMode = mode;
             }
             resize() {
                 this.resizeCount = (this.resizeCount || 0) + 1;
@@ -852,6 +857,26 @@ test('a current-image download keeps its snapshot when the user selects another 
         e.requests.filter((r) => r.url === '/upload-edited').length,
         0,
     );
+});
+
+test('the hand pans the crop view, including inside the crop box, and survives a new image', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    assert.equal(e.cropper().options.toggleDragModeOnDblclick, false);
+    e.element('panToggle').click();
+    assert.equal(e.element('panToggle')['aria-pressed'], 'true');
+    assert.equal(e.cropper().options.dragMode, 'move');
+    assert.equal(e.element('.cropper-face').dataset.cropperAction, 'move');
+    assert.equal(e.element('dropZone').classList.contains('panning'), true);
+    // A new cropper starts in crop mode, so the hand is applied again when it is ready.
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.cropper().options.dragMode, 'move');
+    e.element('panToggle').click();
+    assert.equal(e.element('panToggle')['aria-pressed'], 'false');
+    assert.equal(e.cropper().options.dragMode, 'crop');
+    assert.equal(e.element('.cropper-face').dataset.cropperAction, 'all');
 });
 
 test('switching and collapsing tools preserves the active cropper and edits', async () => {
@@ -2260,8 +2285,8 @@ test('restore mode and brush size apply to the next stroke, and zoom maps the po
     const dot = coverageCanvas(e).ops.filter(([op]) => op === 'arc').at(-1);
     assert.deepEqual(dot.slice(1, 3), [2, 2]);
     assert.ok(Math.abs(dot[3] - 27 / (BRUSH_SCALE * 1.5625) / 2) < 1e-9);
-    // Move mode pans instead of painting.
-    e.element('brushMove').click();
+    // The hand beside the zoom buttons pans instead of painting.
+    e.element('panToggle').click();
     const arcs = coverageCanvas(e).ops.length;
     pointer(brushCanvas(e), 'pointerdown', [400, 300]);
     pointer(brushCanvas(e), 'pointermove', [450, 300]);

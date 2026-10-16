@@ -309,7 +309,7 @@
         document.getElementById('brushOptions').hidden = Boolean(hint) || !removeBgCheckbox.checked;
     }
 
-    const brushModes = { brushErase: 'erase', brushRestore: 'restore', brushMove: 'move' };
+    const brushModes = { brushErase: 'erase', brushRestore: 'restore' };
     for (const [id, mode] of Object.entries(brushModes)) {
         document.getElementById(id).addEventListener('click', () => {
             for (const other of Object.keys(brushModes))
