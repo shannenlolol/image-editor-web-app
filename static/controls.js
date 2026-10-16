@@ -19,6 +19,7 @@
     const toolButtons = {
         crop: document.getElementById('cropTool'),
         background: document.getElementById('backgroundTool'),
+        brush: document.getElementById('brushTool'),
         rotation: document.getElementById('rotationTool'),
     };
     let activeTool = 'crop';
@@ -127,6 +128,7 @@
 
     function setActiveTool(tool) {
         closePresetMenu();
+        const previousTool = activeTool;
         activeTool = tool;
         toolPanel.hidden = !tool;
         for (const name of Object.keys(toolButtons)) {
@@ -140,8 +142,15 @@
             document.getElementById('toolPanelTitle').textContent = {
                 crop: 'Crop',
                 background: 'Background',
+                brush: 'Cutout',
                 rotation: 'Rotate & flip',
             }[tool];
+        // The brush view replaces the crop view only while its panel is open.
+        if (previousTool === 'brush' && tool !== 'brush') editor.closeBrush();
+        if (tool === 'brush' && previousTool !== 'brush') {
+            syncBrushPanel();
+            editor.openBrush();
+        }
     }
 
     for (const [name, button] of Object.entries(toolButtons)) {
@@ -167,6 +176,7 @@
     if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(() => {
             if (editor.cropper && editor.cropper.ready) editor.cropper.resize();
+            editor.resizeBrush();
         }).observe(document.getElementById('dropZone'));
     }
 
@@ -275,6 +285,7 @@
         for (const id of [
             'cropControls',
             'backgroundControls',
+            'brushControls',
             'rotationControls',
         ]) {
             document.getElementById(id).disabled = disabled;
@@ -288,6 +299,29 @@
     document
         .getElementById('applyRemovalToAll')
         .addEventListener('click', editor.applyRemovalToAll);
+
+    // Offer the brush once removal is on, or explain why it is unavailable.
+    function syncBrushPanel() {
+        const hint = editor.brushHint;
+        const hintElement = document.getElementById('brushHint');
+        hintElement.textContent = hint;
+        hintElement.hidden = !hint;
+        document.getElementById('brushOptions').hidden = Boolean(hint) || !removeBgCheckbox.checked;
+    }
+
+    const brushModes = { brushErase: 'erase', brushRestore: 'restore', brushMove: 'move' };
+    for (const [id, mode] of Object.entries(brushModes)) {
+        document.getElementById(id).addEventListener('click', () => {
+            for (const other of Object.keys(brushModes))
+                document.getElementById(other).setAttribute('aria-pressed', String(other === id));
+            editor.setBrushMode(mode);
+        });
+    }
+    document.getElementById('brushSize').addEventListener('input', (event) => {
+        const size = Number(event.target.value);
+        document.getElementById('brushSizeValue').textContent = `${size} px`;
+        editor.setBrushSize(size);
+    });
 
     // Ignore incomplete values while typing, and update without rebuilding the editor.
     function applyResolution() {
@@ -552,6 +586,8 @@
         syncPresetMenu,
         syncRotationControls,
         syncBackgroundControls,
+        syncBrushPanel,
+        brushToolActive: () => activeTool === 'brush',
         updateDownloadState,
         setDownloadStatus,
     });
