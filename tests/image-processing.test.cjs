@@ -2441,3 +2441,83 @@ test('switching images or downloading while brushing bakes the strokes first', a
     assert.equal(e.downloads.length, 1);
     assert.equal(e.canvases.at(-1).draws[0].source.source, 'brushed again');
 });
+
+// Pick a background photo through the hidden file input, then decode it.
+async function choosePhoto(e, file = { name: 'beach.jpg', width: 8, height: 4 }) {
+    const input = e.element('bgPhotoInput');
+    input.files = [file];
+    input.dispatchEvent(new Event('change'));
+    await flush();
+    await e.decode();
+}
+
+test('the Photo swatch picks a photo, which fills the crop box cover-fitted', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    let opened = 0;
+    e.element('bgPhotoInput').addEventListener('click', () => (opened += 1));
+    e.element('photoBg').click();
+    assert.equal(opened, 1);
+    await choosePhoto(e);
+    assert.equal(e.element('photoBg')['aria-pressed'], 'true');
+    assert.equal(e.element('photoBg').classList.contains('has-photo'), true);
+    assert.equal(e.cropper().options.fillColor, 'transparent');
+    assert.match(e.element('.cropper-view-box').style.background, /^url\("blob:\d+"\) center \/ cover/);
+    // Another background, then the swatch switches back without asking again.
+    e.element('whiteBg').click();
+    e.element('photoBg').click();
+    assert.equal(opened, 1);
+    assert.equal(e.element('photoBg')['aria-pressed'], 'true');
+    // Clicking it while chosen picks a new photo.
+    e.element('photoBg').click();
+    assert.equal(opened, 2);
+    // Each choice is an undo step.
+    e.element('undoButton').click();
+    assert.equal(e.element('whiteBg')['aria-pressed'], 'true');
+    e.element('redoButton').click();
+    assert.equal(e.element('photoBg')['aria-pressed'], 'true');
+});
+
+test('downloading draws the photo cover-fitted under the image', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    await choosePhoto(e);
+    e.download(false);
+    await flush();
+    const [photo, image] = e.exports.at(-1).canvas.draws;
+    // An 8 × 4 photo covering 640 × 480 is scaled by 120, so its middle
+    // 5⅓ × 4 pixels fill the frame.
+    assertNear(photo.position, [4 / 3, 0, 16 / 3, 4, 0, 0, 640, 480]);
+    assert.equal(image.source.options.fillColor, 'transparent');
+});
+
+test('new uploads start with the photo background, and a photo that fails to open changes nothing', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    await choosePhoto(e);
+    const photoUrl = e.element('.cropper-view-box').style.background;
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.element('photoBg')['aria-pressed'], 'true');
+    assert.equal(e.element('.cropper-view-box').style.background, photoUrl);
+    e.element('blackBg').click();
+    const input = e.element('bgPhotoInput');
+    input.files = [{ name: 'broken.heic', width: 8, height: 4 }];
+    input.dispatchEvent(new Event('change'));
+    await flush();
+    e.decodes.at(-1).reject(new Error('EncodingError'));
+    await flush();
+    assert.match(e.alerts.at(-1), /could not be opened/);
+    assert.equal(e.element('blackBg')['aria-pressed'], 'true');
+});
+
+test('the brush view draws the photo behind the cut-out', async () => {
+    const e = await cutoutImage();
+    await choosePhoto(e);
+    await openBrushTool(e);
+    // The 8 × 4 photo is drawn into the brush view, under the cut-out.
+    assert.ok(brushCanvas(e).draws.some(({ source }) => source.naturalWidth === 8));
+});

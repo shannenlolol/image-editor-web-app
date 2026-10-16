@@ -19,7 +19,11 @@ window.ImageEditor = (() => {
     let shownUrl = null;
     let selectedFileName = '';
     let sourceDimensions = null;
+    // A colour, 'transparent', or 'photo' (backgroundPhoto, cover-fitted).
     let selectedBackground = 'transparent';
+    // { url, image }: a decoded photo, shared by every image
+    // and undo step that uses it.
+    let backgroundPhoto = null;
     let rotationAngle = 0;
     let horizontalScale = 1;
     let verticalScale = 1;
@@ -84,7 +88,7 @@ window.ImageEditor = (() => {
             dragMode: 'crop',
             // The hand button switches modes, so a double-click must not do it unseen.
             toggleDragModeOnDblclick: false,
-            fillColor: selectedBackground,
+            fillColor: fillColor(selectedBackground),
             minContainerWidth: 0,
             minContainerHeight: 0,
             minCropBoxWidth: 10,
@@ -622,6 +626,34 @@ window.ImageEditor = (() => {
         }
     }
 
+    // Where a colour is needed (Cropper's fill), a photo background fills
+    // nothing; it is drawn separately, cover-fitted.
+    function fillColor(background) {
+        return background === 'photo' ? 'transparent' : background;
+    }
+
+    // The brush view takes a colour, or the photo itself.
+    function brushBackground() {
+        if (selectedBackground !== 'photo') return selectedBackground;
+        return backgroundPhoto || 'transparent';
+    }
+
+    // Decode a chosen background photo, so it can be drawn at once and the
+    // export (which runs without waiting) can use it.
+    async function loadBackgroundPhoto(file) {
+        const url = URL.createObjectURL(file);
+        try {
+            const image = new Image();
+            image.src = url;
+            await image.decode();
+            return { url, image };
+        } catch (error) {
+            URL.revokeObjectURL(url);
+            error.userMessage = 'This photo could not be opened. Try another image file.';
+            throw error;
+        }
+    }
+
     // Why the brush is unavailable for a cut-out. With removal off the panel
     // just hides the brush, as its switch sits right above.
     function brushHint() {
@@ -703,7 +735,7 @@ window.ImageEditor = (() => {
         }
         session.layers = layers;
         dropZone.classList.add('brushing');
-        brushView.show({ ...layers, background: selectedBackground }, cropperFrame(layers));
+        brushView.show({ ...layers, background: brushBackground() }, cropperFrame(layers));
     }
 
     // How the crop view shows the image, relative to the brush view (which
@@ -868,7 +900,7 @@ window.ImageEditor = (() => {
 
     function handleFiles(files) {
         if (!files.length) return;
-        const defaults = { background: selectedBackground };
+        const defaults = { background: selectedBackground, photo: backgroundPhoto };
         files.forEach((file) => {
             imageRecords.set(file, {
                 file,
@@ -893,6 +925,7 @@ window.ImageEditor = (() => {
         if (record.settings) restoreImageSettings(record.settings);
         else {
             selectedBackground = defaults ? defaults.background : 'transparent';
+            backgroundPhoto = defaults ? defaults.photo : null;
             controls.syncBackgroundControls();
         }
         // New uploads start with removal off; each image keeps its own setting.
@@ -910,6 +943,7 @@ window.ImageEditor = (() => {
             sourceDimensions,
             removeBackground: Boolean(imageRecords.get(selectedFile)?.removeBackground),
             background: selectedBackground,
+            photo: backgroundPhoto,
             customColor: bgColorInput.value,
             rotation: rotationAngle,
             horizontalScale,
@@ -923,6 +957,7 @@ window.ImageEditor = (() => {
         document.getElementById('aspectRatioPreset').value = settings.preset;
         sourceDimensions = settings.sourceDimensions;
         selectedBackground = settings.background;
+        backgroundPhoto = settings.photo;
         bgColorInput.value = settings.customColor;
         rotationAngle = settings.rotation;
         horizontalScale = settings.horizontalScale;
@@ -977,7 +1012,7 @@ window.ImageEditor = (() => {
         controls.applyImageTransform();
         cropper.setData(cropData);
         controls.updateBackgroundColor(selectedBackground);
-        brushView.setBackground(selectedBackground);
+        brushView.setBackground(brushBackground());
         if (!record.removeBackground) endBrush();
         controls.syncBrushPanel();
         // While brushing, the cut-out is rebuilt when the view closes.
@@ -1180,7 +1215,7 @@ window.ImageEditor = (() => {
         const croppedCanvas = sourceCropper.getCroppedCanvas({
             width: scaledWidth,
             height: scaledHeight,
-            fillColor: settings.background,
+            fillColor: fillColor(settings.background),
         });
         if (!croppedCanvas) throw new Error('Could not render the image.');
         const canvas = document.createElement('canvas');
@@ -1188,7 +1223,9 @@ window.ImageEditor = (() => {
         canvas.height = height;
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Could not create the download canvas.');
-        if (settings.background !== 'transparent') {
+        if (settings.background === 'photo' && settings.photo) {
+            ImageBrush.drawCover(context, settings.photo.image, 0, 0, width, height);
+        } else if (settings.background !== 'transparent') {
             context.fillStyle = settings.background;
             context.fillRect(0, 0, width, height);
         }
@@ -1412,6 +1449,14 @@ window.ImageEditor = (() => {
         set selectedBackground(value) {
             selectedBackground = value;
         },
+        get backgroundPhoto() {
+            return backgroundPhoto;
+        },
+        set backgroundPhoto(value) {
+            backgroundPhoto = value;
+        },
+        loadBackgroundPhoto,
+        fillColor,
         get rotationAngle() {
             return rotationAngle;
         },

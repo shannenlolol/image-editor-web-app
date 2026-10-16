@@ -70,6 +70,28 @@ window.ImageBrush = (() => {
         return canvas;
     }
 
+    // Draw `image` to fill the box, keeping its shape: scaled to cover, centred,
+    // with the overflow cropped off. Used for photo backgrounds, here and in
+    // the editor's export.
+    function drawCover(context, image, x, y, width, height) {
+        const imageWidth = image.naturalWidth || image.width;
+        const imageHeight = image.naturalHeight || image.height;
+        const scale = Math.max(width / imageWidth, height / imageHeight);
+        const sourceWidth = width / scale;
+        const sourceHeight = height / scale;
+        context.drawImage(
+            image,
+            (imageWidth - sourceWidth) / 2,
+            (imageHeight - sourceHeight) / 2,
+            sourceWidth,
+            sourceHeight,
+            x,
+            y,
+            width,
+            height,
+        );
+    }
+
     // 2D affine matrices as [a, b, c, d, e, f], the canvas setTransform order:
     // x' = a·x + c·y + e, y' = b·x + d·y + f. multiply(m, n) applies n first.
     function multiply(m, ...rest) {
@@ -194,8 +216,12 @@ window.ImageBrush = (() => {
             context.setTransform(1, 0, 0, 1, 0, 0);
             context.clearRect(0, 0, pixelWidth, pixelHeight);
             // The background fills the crop box, as in the crop view; a
-            // transparent one lets the container's checks show through.
-            if (background !== 'transparent') {
+            // transparent one lets the container's checks show through. A
+            // photo (an object rather than a colour) is cover-fitted to it.
+            if (background && typeof background === 'object') {
+                context.setTransform(...stage);
+                drawCover(context, background.image, crop.left, crop.top, crop.width, crop.height);
+            } else if (background !== 'transparent') {
                 context.setTransform(...stage);
                 context.fillStyle = background;
                 context.fillRect(crop.left, crop.top, crop.width, crop.height);
@@ -360,9 +386,10 @@ window.ImageBrush = (() => {
                 fit(placement);
                 requestRender();
             },
-            setBackground(color) {
+            // A colour, 'transparent', or a photo ({ image }).
+            setBackground(background) {
                 if (!layers) return;
-                layers.background = color;
+                layers.background = background;
                 requestRender();
             },
             setMode(next) {
@@ -387,5 +414,5 @@ window.ImageBrush = (() => {
         };
     }
 
-    return { coverageFromMask, paintStrokes, composite, createView };
+    return { coverageFromMask, paintStrokes, composite, createView, drawCover };
 })();
