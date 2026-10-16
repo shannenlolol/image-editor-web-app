@@ -251,8 +251,19 @@ function editor({ webpEncoding = true } = {}) {
             setDragMode(mode) {
                 this.options.dragMode = mode;
             }
+            // Tests resize the stage by setting `nextContainer` before resizing.
             resize() {
                 this.resizeCount = (this.resizeCount || 0) + 1;
+                if (this.nextContainer) this.containerData = this.nextContainer;
+            }
+            getContainerData() {
+                return { ...(this.containerData || { width: 800, height: 600 }) };
+            }
+            setCanvasData(data) {
+                this.canvasData = data;
+            }
+            setCropBoxData(data) {
+                this.cropBoxData = data;
             }
             rotateTo(angle) {
                 this.rotation = angle;
@@ -963,6 +974,29 @@ test('canvas resizing waits for Cropper readiness and reuses the instance', asyn
     assert.equal(cropper.resizeCount, 1);
     assert.equal(e.cropper(), cropper);
     assert.equal(cropper.destroyed, undefined);
+});
+
+test('a wider stage keeps the picture\'s size, and a narrower one shrinks it only to fit', async () => {
+    const e = editor();
+    await e.select({ name: 'A.png' }, false);
+    await e.decode();
+    const cropper = e.cropper();
+    cropper.canvasData = { left: 100, top: 50, width: 600, height: 400 };
+    cropper.cropBoxData = { left: 150, top: 100, width: 500, height: 300 };
+    // Closing the side panel: 200 px wider. Same size, still centred.
+    cropper.nextContainer = { width: 1000, height: 600 };
+    e.resizeCanvas();
+    assert.deepEqual({ ...cropper.canvasData }, { left: 200, top: 50, width: 600, height: 400 });
+    assert.deepEqual({ ...cropper.cropBoxData }, { left: 250, top: 100, width: 500, height: 300 });
+    // Back to 800 px: it still fits, so nothing shrinks.
+    cropper.nextContainer = { width: 800, height: 600 };
+    e.resizeCanvas();
+    assert.deepEqual({ ...cropper.canvasData }, { left: 100, top: 50, width: 600, height: 400 });
+    // 500 px wide: the 600 px picture must shrink to fit 450 px (25 px margins).
+    cropper.nextContainer = { width: 500, height: 600 };
+    e.resizeCanvas();
+    assert.deepEqual({ ...cropper.canvasData }, { left: 25, top: 112.5, width: 450, height: 300 });
+    assert.deepEqual({ ...cropper.cropBoxData }, { left: 62.5, top: 150, width: 375, height: 225 });
 });
 
 test('resolution inputs apply immediately without Enter, blur, or recreating the cropper', async () => {

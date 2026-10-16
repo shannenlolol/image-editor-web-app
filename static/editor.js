@@ -72,7 +72,9 @@ window.ImageEditor = (() => {
             viewMode: 0,
             autoCropArea: 1,
             background: true,
-            responsive: true,
+            // The stage's ResizeObserver calls resizeCropper instead, which
+            // keeps the image's size; Cropper's own handler would scale it.
+            responsive: typeof ResizeObserver === 'undefined',
             restore: true,
             center: true,
             highlight: false,
@@ -738,6 +740,47 @@ window.ImageEditor = (() => {
         };
     }
 
+    // Fit the crop view to a resized stage (a panel opening or closing, or the
+    // window resizing). Cropper's resize scales the picture with the stage's
+    // width, so a wider stage made it taller than the stage. Instead, keep
+    // its size and its place relative to the centre, and only shrink it if it
+    // would no longer fit (keeping any overflow from zooming in).
+    function resizeCropper() {
+        if (!cropper || !cropper.ready) return;
+        const before = cropper.getContainerData();
+        const canvasData = cropper.getCanvasData();
+        const cropBox = cropper.getCropBoxData();
+        cropper.resize();
+        if (!canvasData) return;
+        const after = cropper.getContainerData();
+        if (!before.width || (after.width === before.width && after.height === before.height)) return;
+        const boxes = cropBox.width ? [canvasData, cropBox] : [canvasData];
+        const oldX = before.width / 2;
+        const oldY = before.height / 2;
+        // How far the picture reaches from the centre, against the room there
+        // is (keeping a 25 px margin, as the first fit does): over 1 overflows.
+        const reach = (container) =>
+            Math.max(
+                ...boxes.map(({ left, width }) =>
+                    Math.max(Math.abs(left - oldX), Math.abs(left + width - oldX)) /
+                    Math.max(container.width / 2 - 25, 1),
+                ),
+                ...boxes.map(({ top, height }) =>
+                    Math.max(Math.abs(top - oldY), Math.abs(top + height - oldY)) /
+                    Math.max(container.height / 2 - 25, 1),
+                ),
+            );
+        const scale = Math.min(1, Math.max(reach(before), 1) / reach(after));
+        const place = ({ left, top, width, height }) => ({
+            left: after.width / 2 + (left - oldX) * scale,
+            top: after.height / 2 + (top - oldY) * scale,
+            width: width * scale,
+            height: height * scale,
+        });
+        cropper.setCanvasData(place(canvasData));
+        if (cropBox.width) cropper.setCropBoxData(place(cropBox));
+    }
+
     function resizeBrush() {
         if (brushSession && brushSession.layers)
             brushView.resize(cropperFrame(brushSession.layers));
@@ -1315,6 +1358,7 @@ window.ImageEditor = (() => {
         setBrushMode: (mode) => brushView.setMode(mode),
         setBrushSize: (size) => brushView.setSize(size),
         resizeBrush,
+        resizeCropper,
         get brushHint() {
             return brushHint();
         },

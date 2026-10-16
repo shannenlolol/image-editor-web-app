@@ -172,10 +172,10 @@
             closeToolPanel();
         }
     });
-    // Let Cropper preserve its crop data when the available canvas space changes.
+    // Keep the picture's size when the stage changes size; see resizeCropper.
     if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(() => {
-            if (editor.cropper && editor.cropper.ready) editor.cropper.resize();
+            editor.resizeCropper();
             editor.resizeBrush();
         }).observe(document.getElementById('dropZone'));
     }
