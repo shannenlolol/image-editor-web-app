@@ -1074,7 +1074,8 @@ input:focus-visible {
   cursor: pointer;
 }
 .transparent-swatch {
-  background: repeating-conic-gradient(#fff 0% 25%, #ddd 0% 50%) 50% / 10px 10px;
+  background: repeating-conic-gradient(var(--checker-light) 0% 25%, var(--checker-dark) 0% 50%) 50% /
+    10px 10px;
 }
 .white-swatch {
   background: #fff;

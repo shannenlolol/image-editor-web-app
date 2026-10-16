@@ -252,8 +252,9 @@
             editor.cropper.options.fillColor = color;
             const viewBox = document.querySelector('.cropper-view-box');
             const preview = document.querySelector('#preview');
+            // The theme's checks, so the crop view matches the stage around it.
             const bgPattern =
-                'repeating-conic-gradient(#FFFFFF 0% 25%, #E8E8E8 0% 50%) 50% / 20px 20px';
+                'repeating-conic-gradient(var(--checker-light) 0% 25%, var(--checker-dark) 0% 50%) 50% / 20px 20px';
 
             if (viewBox) {
                 if (color === 'transparent') {
