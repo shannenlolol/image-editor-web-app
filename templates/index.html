@@ -273,7 +273,7 @@
                 <section id="backgroundPanel" aria-labelledby="backgroundTool" hidden>
                     <fieldset id="backgroundControls" class="tool-controls" disabled>
                         <fieldset class="background-replacements" id="backgroundReplacements">
-                            <legend>Background Colour</legend>
+                            <legend>Background</legend>
                             <div class="background-swatches">
                                 <button type="button" id="transparentBg" class="background-swatch transparent-swatch"
                                     aria-label="Transparent background" aria-pressed="true"
@@ -291,6 +291,16 @@
                                     <input type="color" id="bgColor" value="#ffffff"
                                         aria-label="Custom background colour picker" tabindex="-1" />
                                 </div>
+                                <button type="button" id="photoBg" class="background-swatch photo-swatch"
+                                    aria-label="Photo background" aria-pressed="false" title="Photo">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <rect x="3" y="4" width="18" height="16" rx="2" />
+                                        <circle cx="9" cy="10" r="1.8" />
+                                        <path d="m21 16-5-5-9 9" />
+                                    </svg>
+                                </button>
+                                <input type="file" id="bgPhotoInput" accept="image/*" hidden />
                             </div>
                         </fieldset>
                     </fieldset>

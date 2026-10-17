@@ -257,28 +257,21 @@
         editor.commitEdit();
     });
 
-    function updateBackgroundColor(color) {
-        if (editor.cropper) {
-            editor.cropper.options.fillColor = color;
-            const viewBox = document.querySelector('.cropper-view-box');
-            const preview = document.querySelector('#preview');
-            // The theme's checks, so the crop view matches the stage around it.
-            const bgPattern =
-                'repeating-conic-gradient(var(--checker-light) 0% 25%, var(--checker-dark) 0% 50%) 50% / 20px 20px';
-
-            if (viewBox) {
-                if (color === 'transparent') {
-                    viewBox.style.background = bgPattern;
-                } else {
-                    viewBox.style.background = color;
-                }
-            }
-
-            if (preview) {
-                preview.style.background =
-                    color === 'transparent' ? bgPattern : color;
-            }
-        }
+    // Show the background in the crop box: the theme's checks when it is
+    // transparent, so the crop view matches the stage around it; a colour; or
+    // the photo, cover-fitted as in the download.
+    function updateBackgroundColor(background) {
+        if (!editor.cropper) return;
+        editor.cropper.options.fillColor = editor.fillColor(background);
+        const viewBox = document.querySelector('.cropper-view-box');
+        if (!viewBox) return;
+        const photo = editor.backgroundPhoto;
+        viewBox.style.background =
+            background === 'transparent' || (background === 'photo' && !photo)
+                ? 'repeating-conic-gradient(var(--checker-light) 0% 25%, var(--checker-dark) 0% 50%) 50% / 20px 20px'
+                : background === 'photo'
+                  ? `url("${photo.url}") center / cover no-repeat`
+                  : background;
     }
 
     function setToolControlsDisabled(disabled) {
@@ -383,15 +376,18 @@
             editor.commitEdit();
         });
 
+    const backgroundSwatchIds = ['transparentBg', 'whiteBg', 'blackBg', 'customBg', 'photoBg'];
+
     function selectBackground(color, activeButton) {
         editor.selectedBackground = color;
-        for (const id of ['transparentBg', 'whiteBg', 'blackBg', 'customBg']) {
+        for (const id of backgroundSwatchIds) {
             document
                 .getElementById(id)
                 .setAttribute('aria-pressed', String(id === activeButton));
         }
         updateBackgroundColor(color);
     }
+
 
     transparentBgButton.addEventListener('click', () => {
         selectBackground('transparent', 'transparentBg');
@@ -427,6 +423,43 @@
         editor.commitEdit();
     });
 
+    // The Photo swatch picks a photo the first time, switches back to it after
+    // another background, and picks a new one when clicked while chosen.
+    const photoInput = document.getElementById('bgPhotoInput');
+    document.getElementById('photoBg').addEventListener('click', () => {
+        if (editor.backgroundPhoto && editor.selectedBackground !== 'photo') {
+            selectBackground('photo', 'photoBg');
+            editor.commitEdit();
+        } else {
+            photoInput.click();
+        }
+    });
+    photoInput.addEventListener('change', async () => {
+        const [file] = photoInput.files;
+        // Clear it, so choosing the same file again still fires change.
+        photoInput.value = '';
+        if (!file) return;
+        try {
+            editor.backgroundPhoto = await editor.loadBackgroundPhoto(file);
+        } catch (error) {
+            console.error('Error:', error);
+            alert(error.userMessage);
+            return;
+        }
+        syncPhotoSwatch();
+        selectBackground('photo', 'photoBg');
+        editor.commitEdit();
+    });
+
+    // The swatch shows the current image's photo, or an icon before one is chosen.
+    function syncPhotoSwatch() {
+        const photo = editor.backgroundPhoto;
+        const swatch = document.getElementById('photoBg');
+        swatch.style.backgroundImage = photo ? `url("${photo.url}")` : '';
+        swatch.classList.toggle('has-photo', Boolean(photo));
+        swatch.title = photo ? 'Photo (click again to change it)' : 'Photo';
+    }
+
     function syncBackgroundControls() {
         const color = editor.selectedBackground;
         const activeId =
@@ -436,14 +469,17 @@
                   ? 'whiteBg'
                   : color === '#000000'
                     ? 'blackBg'
-                    : 'customBg';
-        for (const id of ['transparentBg', 'whiteBg', 'blackBg', 'customBg']) {
+                    : color === 'photo'
+                      ? 'photoBg'
+                      : 'customBg';
+        for (const id of backgroundSwatchIds) {
             document
                 .getElementById(id)
                 .setAttribute('aria-pressed', String(id === activeId));
         }
         document.getElementById('customBg').style.backgroundColor =
             bgColorInput.value;
+        syncPhotoSwatch();
     }
 
     const downloadTrigger = document.getElementById('downloadMenuButton');
