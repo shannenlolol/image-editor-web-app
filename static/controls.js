@@ -513,18 +513,14 @@
     }
 
     const exportFormat = document.getElementById('exportFormat');
-    const exportQuality = document.getElementById('exportQuality');
+    // JPEG and WebP are saved at a fixed quality: high enough to look the
+    // same as the preview, while still much smaller than PNG.
+    const EXPORT_QUALITY = 0.9;
     let webpChecked = false;
 
     function syncExportOptions() {
-        const lossy =
-            exportFormat.value === 'image/jpeg' ||
-            exportFormat.value === 'image/webp';
-        document.getElementById('exportQualityRow').hidden = !lossy;
         document.getElementById('exportNote').hidden =
             exportFormat.value !== 'image/jpeg';
-        document.getElementById('exportQualityValue').textContent =
-            `${exportQuality.value}%`;
     }
 
     // Some browsers (older Safari) cannot encode WebP and silently fall back
@@ -545,13 +541,12 @@
         if (exportFormat.value === 'image/jpeg' || exportFormat.value === 'image/webp')
             return {
                 type: exportFormat.value,
-                quality: Number(exportQuality.value) / 100,
+                quality: EXPORT_QUALITY,
             };
         return { type: 'image/png' };
     }
 
     exportFormat.addEventListener('change', syncExportOptions);
-    exportQuality.addEventListener('input', syncExportOptions);
 
     downloadTrigger.addEventListener('click', () => {
         if (!editor.canDownload) return;
@@ -580,7 +575,7 @@
             closeDownloadMenu(true);
         } else if (
             (event.key === 'ArrowDown' || event.key === 'ArrowUp') &&
-            // The format select and quality slider need their own arrow keys.
+            // The format select needs its own arrow keys.
             downloadActions.includes(event.target)
         ) {
             event.preventDefault();

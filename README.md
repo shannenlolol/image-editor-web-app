@@ -52,7 +52,7 @@ Upload, drag in or paste several images and switch between them. Each image reme
 Step back and forward through your edits with the buttons or Ctrl/⌘+Z and Ctrl/⌘+Shift+Z.
 
 ### Download
-Download the current image, or all images together as a ZIP, as PNG, JPEG or WebP with adjustable quality.
+Download the current image, or all images together as a ZIP, as PNG, JPEG or WebP.
 
 ![Download menu with current image and ZIP options](static/assets/screenshots/download_menu.webp)
 
