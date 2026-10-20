@@ -20,6 +20,7 @@
         crop: document.getElementById('cropTool'),
         background: document.getElementById('backgroundTool'),
         brush: document.getElementById('brushTool'),
+        adjust: document.getElementById('adjustTool'),
         rotation: document.getElementById('rotationTool'),
     };
     let activeTool = 'crop';
@@ -143,6 +144,7 @@
                 crop: 'Crop',
                 background: 'Background',
                 brush: 'Cutout',
+                adjust: 'Adjust',
                 rotation: 'Rotate & flip',
             }[tool];
         // The brush view replaces the crop view only while its panel is open.
@@ -279,6 +281,7 @@
             'cropControls',
             'backgroundControls',
             'brushControls',
+            'adjustControls',
             'rotationControls',
         ]) {
             document.getElementById(id).disabled = disabled;
@@ -482,6 +485,82 @@
         syncPhotoSwatch();
     }
 
+    // Each slider previews while dragged and records one undo step when it
+    // settles, like the rotation slider.
+    const ImageAdjustments = window.ImageAdjustments;
+    const adjustSlider = (name) => document.getElementById(`adjust-${name}`);
+
+    function formatAdjustment(value) {
+        return value > 0 ? `+${value}` : value < 0 ? `−${-value}` : '0';
+    }
+
+    function updateAdjustmentPreview() {
+        const { adjustments } = editor;
+        ImageAdjustments.syncPreviewFilters(
+            adjustments,
+            document.getElementById('adjustWarmthMatrix'),
+            document.getElementById('adjustSharpenKernel'),
+        );
+        document
+            .getElementById('dropZone')
+            .style.setProperty('--adjust-filter', ImageAdjustments.cssFilter(adjustments));
+    }
+
+    function syncAdjustmentControls() {
+        const { adjustments } = editor;
+        for (const name of ImageAdjustments.NAMES) {
+            const slider = adjustSlider(name);
+            const value = adjustments[name];
+            slider.value = String(value);
+            // Fill the track between 0 and the thumb, as fractions of the range.
+            const min = ImageAdjustments.MINIMUM[name];
+            const zero = -min / (100 - min);
+            const at = (value - min) / (100 - min);
+            slider.style.setProperty('--from', String(Math.min(zero, at)));
+            slider.style.setProperty('--to', String(Math.max(zero, at)));
+            slider.classList.toggle('at-zero', value === 0);
+            document.getElementById(`adjust-${name}-value`).textContent = formatAdjustment(
+                adjustments[name],
+            );
+        }
+        document.getElementById('resetAdjustments').disabled =
+            ImageAdjustments.isNeutral(adjustments);
+        updateAdjustmentPreview();
+    }
+
+    // Dragging a slider that goes both ways sticks at 0 within this distance,
+    // so the middle is easy to land on. Arrow keys step past it as usual.
+    const SNAP_TO_ZERO = 4;
+    let draggedSlider = null;
+    window.addEventListener('pointerup', () => (draggedSlider = null));
+    window.addEventListener('pointercancel', () => (draggedSlider = null));
+
+    for (const name of ImageAdjustments.NAMES) {
+        const slider = adjustSlider(name);
+        slider.addEventListener('pointerdown', () => (draggedSlider = slider));
+        slider.addEventListener('input', () => {
+            let value = Number(slider.value);
+            if (!Number.isFinite(value)) return;
+            if (
+                draggedSlider === slider &&
+                ImageAdjustments.MINIMUM[name] < 0 &&
+                Math.abs(value) <= SNAP_TO_ZERO
+            )
+                value = 0;
+            // A short buzz on landing at 0, on phones that support it (not iOS).
+            if (value === 0 && editor.adjustments[name] !== 0 && window.navigator?.vibrate)
+                window.navigator.vibrate(10);
+            editor.adjustments = { ...editor.adjustments, [name]: value };
+            syncAdjustmentControls();
+        });
+        slider.addEventListener('change', editor.commitEdit);
+    }
+    document.getElementById('resetAdjustments').addEventListener('click', () => {
+        editor.adjustments = { ...ImageAdjustments.NEUTRAL };
+        syncAdjustmentControls();
+        editor.commitEdit();
+    });
+
     const downloadTrigger = document.getElementById('downloadMenuButton');
     const downloadMenu = document.getElementById('downloadMenu');
     const downloadControl = document.getElementById('downloadControl');
@@ -622,6 +701,7 @@
         syncPresetMenu,
         syncRotationControls,
         syncBackgroundControls,
+        syncAdjustmentControls,
         syncBrushPanel,
         brushToolActive: () => activeTool === 'brush',
         updateDownloadState,
