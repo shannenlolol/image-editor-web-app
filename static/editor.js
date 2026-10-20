@@ -3,6 +3,7 @@ window.ImageEditor = (() => {
     'use strict';
 
     const ImageBrush = window.ImageBrush;
+    const ImageAdjustments = window.ImageAdjustments;
     let controls;
     const imageRecords = new Map();
     let exportBusy = false;
@@ -24,6 +25,8 @@ window.ImageEditor = (() => {
     // { url, image }: a decoded photo, shared by every image
     // and undo step that uses it.
     let backgroundPhoto = null;
+    // Brightness, contrast, saturation, warmth and sharpen; see adjustments.js.
+    let adjustments = { ...ImageAdjustments.NEUTRAL };
     let rotationAngle = 0;
     let horizontalScale = 1;
     let verticalScale = 1;
@@ -598,6 +601,8 @@ window.ImageEditor = (() => {
         record.brush = null;
         record.removeBackground = false;
         removeBgCheckbox.checked = false;
+        adjustments = { ...ImageAdjustments.NEUTRAL };
+        controls.syncAdjustmentControls();
         clearHistory();
         processSelectedImage(selectedFile);
     }
@@ -927,6 +932,9 @@ window.ImageEditor = (() => {
             selectedBackground = defaults ? defaults.background : 'transparent';
             backgroundPhoto = defaults ? defaults.photo : null;
             controls.syncBackgroundControls();
+            // Adjustments suit one photo, so each new upload starts without them.
+            adjustments = { ...ImageAdjustments.NEUTRAL };
+            controls.syncAdjustmentControls();
         }
         // New uploads start with removal off; each image keeps its own setting.
         removeBgCheckbox.checked = Boolean(record.removeBackground);
@@ -945,6 +953,7 @@ window.ImageEditor = (() => {
             background: selectedBackground,
             photo: backgroundPhoto,
             customColor: bgColorInput.value,
+            adjustments: { ...adjustments },
             rotation: rotationAngle,
             horizontalScale,
             verticalScale,
@@ -959,12 +968,14 @@ window.ImageEditor = (() => {
         selectedBackground = settings.background;
         backgroundPhoto = settings.photo;
         bgColorInput.value = settings.customColor;
+        adjustments = { ...settings.adjustments };
         rotationAngle = settings.rotation;
         horizontalScale = settings.horizontalScale;
         verticalScale = settings.verticalScale;
         controls.syncPresetMenu();
         controls.syncRotationControls();
         controls.syncBackgroundControls();
+        controls.syncAdjustmentControls();
     }
 
     // Each image keeps its own history of whole-editor snapshots. Undo restores
@@ -1212,12 +1223,16 @@ window.ImageEditor = (() => {
         );
         const scaledWidth = Math.max(1, Math.round(cropData.width * scale));
         const scaledHeight = Math.max(1, Math.round(cropData.height * scale));
+        // The adjustments change the picture only, so an adjusted one is
+        // cropped without the fill; the background is drawn underneath below.
+        const adjusted = !ImageAdjustments.isNeutral(settings.adjustments);
         const croppedCanvas = sourceCropper.getCroppedCanvas({
             width: scaledWidth,
             height: scaledHeight,
-            fillColor: fillColor(settings.background),
+            fillColor: adjusted ? 'transparent' : fillColor(settings.background),
         });
         if (!croppedCanvas) throw new Error('Could not render the image.');
+        const picture = ImageAdjustments.applyToCanvas(croppedCanvas, settings.adjustments);
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
@@ -1230,7 +1245,7 @@ window.ImageEditor = (() => {
             context.fillRect(0, 0, width, height);
         }
         context.drawImage(
-            croppedCanvas,
+            picture,
             (width - scaledWidth) / 2,
             (height - scaledHeight) / 2,
             scaledWidth,
@@ -1457,6 +1472,12 @@ window.ImageEditor = (() => {
         },
         loadBackgroundPhoto,
         fillColor,
+        get adjustments() {
+            return adjustments;
+        },
+        set adjustments(value) {
+            adjustments = value;
+        },
         get rotationAngle() {
             return rotationAngle;
         },

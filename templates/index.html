@@ -101,6 +101,16 @@
                         <path d="M12 7h9M12 12h9M12 17h9" />
                     </svg>
                 </button>
+                <button type="button" id="adjustTool" class="tool-button" aria-label="Adjust" title="Adjust"
+                    aria-controls="adjustPanel" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" />
+                        <circle cx="15" cy="6" r="2" />
+                        <circle cx="9" cy="12" r="2" />
+                        <circle cx="17" cy="18" r="2" />
+                    </svg>
+                </button>
                 <button type="button" id="rotationTool" class="tool-button" aria-label="Rotate &amp; flip"
                     title="Rotate &amp; flip" aria-controls="rotationPanel" aria-expanded="false">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"
@@ -305,6 +315,63 @@
                         </fieldset>
                     </fieldset>
                 </section>
+                <section id="adjustPanel" aria-labelledby="adjustTool" hidden>
+                    <fieldset id="adjustControls" class="tool-controls" disabled>
+                        <div class="adjust-row">
+                            <div class="dimension-row">
+                                <label for="adjust-brightness">Brightness</label>
+                                <output id="adjust-brightness-value" for="adjust-brightness">0</output>
+                            </div>
+                            <div class="adjust-track centred">
+                                <input type="range" id="adjust-brightness" class="adjust-slider" min="-100" max="100"
+                                    step="1" value="0" />
+                            </div>
+                        </div>
+                        <div class="adjust-row">
+                            <div class="dimension-row">
+                                <label for="adjust-contrast">Contrast</label>
+                                <output id="adjust-contrast-value" for="adjust-contrast">0</output>
+                            </div>
+                            <div class="adjust-track centred">
+                                <input type="range" id="adjust-contrast" class="adjust-slider" min="-100" max="100"
+                                    step="1" value="0" />
+                            </div>
+                        </div>
+                        <div class="adjust-row">
+                            <div class="dimension-row">
+                                <label for="adjust-saturation">Saturation</label>
+                                <output id="adjust-saturation-value" for="adjust-saturation">0</output>
+                            </div>
+                            <div class="adjust-track centred">
+                                <input type="range" id="adjust-saturation" class="adjust-slider" min="-100" max="100"
+                                    step="1" value="0" />
+                            </div>
+                        </div>
+                        <div class="adjust-row">
+                            <div class="dimension-row">
+                                <label for="adjust-warmth">Warmth</label>
+                                <output id="adjust-warmth-value" for="adjust-warmth">0</output>
+                            </div>
+                            <div class="adjust-track centred">
+                                <input type="range" id="adjust-warmth" class="adjust-slider" min="-100" max="100"
+                                    step="1" value="0" />
+                            </div>
+                        </div>
+                        <div class="adjust-row">
+                            <div class="dimension-row">
+                                <label for="adjust-sharpen">Sharpen</label>
+                                <output id="adjust-sharpen-value" for="adjust-sharpen">0</output>
+                            </div>
+                            <div class="adjust-track">
+                                <input type="range" id="adjust-sharpen" class="adjust-slider" min="0" max="100"
+                                    step="1" value="0" />
+                            </div>
+                        </div>
+                        <button type="button" id="resetAdjustments" class="reset-adjustments" disabled>
+                            Reset adjustments
+                        </button>
+                    </fieldset>
+                </section>
             </aside>
             <div class="editor-section">
                 <div class="image-container" id="dropZone">
@@ -321,6 +388,18 @@
                         </div>
                     </div>
                     <img id="image" />
+                    <!-- Warmth and sharpen for the preview's CSS filter; see adjustments.js.
+                         Sized to nothing rather than display: none, which would disable them. -->
+                    <svg class="adjust-filters" aria-hidden="true" focusable="false">
+                        <filter id="adjustWarmth" color-interpolation-filters="sRGB">
+                            <feColorMatrix id="adjustWarmthMatrix" type="matrix"
+                                values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0" />
+                        </filter>
+                        <filter id="adjustSharpen" color-interpolation-filters="sRGB">
+                            <feConvolveMatrix id="adjustSharpenKernel" order="3" preserveAlpha="true"
+                                edgeMode="duplicate" kernelMatrix="0 0 0 0 1 0 0 0 0" />
+                        </filter>
+                    </svg>
                 </div>
 
                 <div class="zoom-controls">
@@ -351,6 +430,7 @@
         <script src="/static/vendor/cropper.min.js"></script>
         <script src="/static/vendor/jszip.min.js"></script>
         <script src="/static/brush.js"></script>
+        <script src="/static/adjustments.js"></script>
         <script src="/static/editor.js"></script>
         <script src="/static/controls.js"></script>
     </div>

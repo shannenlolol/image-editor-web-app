@@ -120,13 +120,21 @@ window.ImageBrush = (() => {
     // pixels through the inverse of that transform. Finished strokes are
     // passed to `onStroke`.
     function createView(container, onStroke) {
+        // Three stacked canvases: the background, the picture, and on top the
+        // dimming, which also takes the pointer. The picture has its own so
+        // the adjustments' CSS filter changes it and not the background.
+        const backdrop = document.createElement('canvas');
+        backdrop.className = 'brush-backdrop';
+        const picture = document.createElement('canvas');
+        picture.className = 'brush-picture';
         const canvas = document.createElement('canvas');
         canvas.className = 'brush-canvas';
-        canvas.hidden = true;
+        const visible = [backdrop, picture, canvas];
+        for (const target of visible) target.hidden = true;
         const cursor = document.createElement('div');
         cursor.className = 'brush-cursor';
         cursor.hidden = true;
-        container.appendChild(canvas);
+        for (const target of visible) container.appendChild(target);
         container.appendChild(cursor);
         // Holds the composited cut-out (and, while restoring, the erased-parts
         // guide) at screen size, so the background can be drawn underneath.
@@ -203,7 +211,7 @@ window.ImageBrush = (() => {
             const ratio = window.devicePixelRatio || 1;
             const pixelWidth = Math.round(width * ratio);
             const pixelHeight = Math.round(height * ratio);
-            for (const target of [canvas, layer]) {
+            for (const target of [...visible, layer]) {
                 if (target.width !== pixelWidth) target.width = pixelWidth;
                 if (target.height !== pixelHeight) target.height = pixelHeight;
             }
@@ -212,21 +220,24 @@ window.ImageBrush = (() => {
             const view = multiply([ratio, 0, 0, ratio, 0, 0], imageToView());
             const stage = [ratio * zoom, 0, 0, ratio * zoom, ratio * panX, ratio * panY];
             const { original, coverage, background } = layers;
+            const backdropContext = backdrop.getContext('2d');
+            const pictureContext = picture.getContext('2d');
             const context = canvas.getContext('2d');
-            context.setTransform(1, 0, 0, 1, 0, 0);
-            context.clearRect(0, 0, pixelWidth, pixelHeight);
+            for (const target of [backdropContext, pictureContext, context]) {
+                target.setTransform(1, 0, 0, 1, 0, 0);
+                target.clearRect(0, 0, pixelWidth, pixelHeight);
+            }
             // The background fills the crop box, as in the crop view; a
             // transparent one lets the container's checks show through. A
             // photo (an object rather than a colour) is cover-fitted to it.
             if (background && typeof background === 'object') {
-                context.setTransform(...stage);
-                drawCover(context, background.image, crop.left, crop.top, crop.width, crop.height);
+                backdropContext.setTransform(...stage);
+                drawCover(backdropContext, background.image, crop.left, crop.top, crop.width, crop.height);
             } else if (background !== 'transparent') {
-                context.setTransform(...stage);
-                context.fillStyle = background;
-                context.fillRect(crop.left, crop.top, crop.width, crop.height);
+                backdropContext.setTransform(...stage);
+                backdropContext.fillStyle = background;
+                backdropContext.fillRect(crop.left, crop.top, crop.width, crop.height);
             }
-            context.setTransform(1, 0, 0, 1, 0, 0);
             const layerContext = layer.getContext('2d');
             // While restoring, show the erased parts tinted red, like
             // Photoshop's quick mask, so they stand out from the checks and
@@ -237,17 +248,16 @@ window.ImageBrush = (() => {
                 layerContext.globalCompositeOperation = 'source-atop';
                 layerContext.fillStyle = 'rgba(255, 0, 0, 0.35)';
                 layerContext.fillRect(0, 0, pixelWidth, pixelHeight);
-                context.globalAlpha = 0.6;
-                context.drawImage(layer, 0, 0);
-                context.globalAlpha = 1;
+                pictureContext.globalAlpha = 0.6;
+                pictureContext.drawImage(layer, 0, 0);
+                pictureContext.globalAlpha = 1;
             }
             drawOnLayer(layerContext, view, original, coverage, 'destination-in');
-            context.drawImage(layer, 0, 0);
+            pictureContext.drawImage(layer, 0, 0);
             // Dim everything outside the crop box, as the crop view's modal
             // does. The even-odd rule fills the whole view except the crop box;
             // the box goes through the same transform as its background, so
             // their edges line up with no undimmed sliver between them.
-            context.setTransform(1, 0, 0, 1, 0, 0);
             context.fillStyle = 'rgba(0, 0, 0, 0.3)';
             context.beginPath();
             context.rect(0, 0, pixelWidth, pixelHeight);
@@ -367,7 +377,7 @@ window.ImageBrush = (() => {
         return {
             show(next, placement) {
                 layers = next;
-                canvas.hidden = false;
+                for (const target of visible) target.hidden = false;
                 fit(placement);
                 render();
             },
@@ -375,10 +385,12 @@ window.ImageBrush = (() => {
                 layers = null;
                 stroke = null;
                 pan = null;
-                canvas.hidden = true;
                 cursor.hidden = true;
                 // Release the screen-sized buffers.
-                canvas.width = canvas.height = layer.width = layer.height = 0;
+                for (const target of [...visible, layer]) {
+                    target.hidden = true;
+                    target.width = target.height = 0;
+                }
             },
             render: requestRender,
             resize(placement) {

@@ -34,7 +34,12 @@ function editor({ webpEncoding = true } = {}) {
     class Element extends EventTarget {
         constructor() {
             super();
-            this.style = {};
+            // Custom properties are stored under their own name, like other styles.
+            this.style = {
+                setProperty(name, value) {
+                    this[name] = value;
+                },
+            };
             this.children = [];
             this.value = '';
             this.dataset = {};
@@ -313,8 +318,10 @@ function editor({ webpEncoding = true } = {}) {
             zoom(value) {
                 this.zoomLevel = (this.zoomLevel || 0) + value;
             }
+            // Tests set `croppedPixels` to check what the download does to them.
             getCroppedCanvas(options) {
                 return {
+                    pixels: this.croppedPixels,
                     source: urls.get(this.url).name,
                     data: this.getData(),
                     options,
@@ -389,6 +396,7 @@ function editor({ webpEncoding = true } = {}) {
             return event.defaultPrevented;
         },
         upload: (files) => context.window.ImageEditor.handleFiles(files),
+        window: context.window,
         download: (all, format) =>
             context.window.ImageEditor.downloadImages(all, format),
         element,
@@ -2176,8 +2184,10 @@ test('pasting text or nothing is left to the browser', async () => {
 // The brush view is fitted to the 800 × 600 container, so a 4 × 4 image is shown
 // at 135 screen pixels per image pixel, offset by (130, 30).
 const BRUSH_SCALE = 135;
-const brushCanvas = (e) =>
-    e.element('dropZone').children.find((child) => child.className.startsWith('brush-canvas'));
+const brushLayer = (e, className) =>
+    e.element('dropZone').children.find((child) => child.className.startsWith(className));
+// The brush view's top canvas, which takes the pointer and dims around the crop box.
+const brushCanvas = (e) => brushLayer(e, 'brush-canvas');
 const atPixel = (x, y) => [130 + x * BRUSH_SCALE, 30 + y * BRUSH_SCALE];
 
 // Pointer positions go through an inverted matrix, so allow rounding error.
@@ -2518,6 +2528,136 @@ test('the brush view draws the photo behind the cut-out', async () => {
     const e = await cutoutImage();
     await choosePhoto(e);
     await openBrushTool(e);
-    // The 8 × 4 photo is drawn into the brush view, under the cut-out.
-    assert.ok(brushCanvas(e).draws.some(({ source }) => source.naturalWidth === 8));
+    // The 8 × 4 photo is drawn on the backdrop, under the cut-out's own canvas.
+    assert.ok(brushLayer(e, 'brush-backdrop').draws.some(({ source }) => source.naturalWidth === 8));
+    assert.ok(brushLayer(e, 'brush-picture').draws.length > 0);
+    assert.ok(!brushLayer(e, 'brush-picture').draws.some(({ source }) => source.naturalWidth === 8));
+});
+
+function slide(e, name, value) {
+    const slider = e.element(`adjust-${name}`);
+    slider.value = String(value);
+    slider.dispatchEvent(new Event('input'));
+}
+
+test('adjustment sliders preview on the picture and record one step when they settle', async () => {
+    const e = await editedImage();
+    const stage = e.element('dropZone');
+    assert.equal(stage.style['--adjust-filter'], 'none');
+    assert.equal(e.element('resetAdjustments').disabled, true);
+    for (const value of [10, 20, 40]) slide(e, 'brightness', value);
+    e.element('adjust-brightness').dispatchEvent(new Event('change'));
+    slide(e, 'warmth', -50);
+    e.element('adjust-warmth').dispatchEvent(new Event('change'));
+    assert.equal(stage.style['--adjust-filter'], 'brightness(1.2) url(#adjustWarmth)');
+    // Cooling scales red down and blue up by half of 20%.
+    assert.equal(
+        e.element('adjustWarmthMatrix').values,
+        '0.9 0 0 0 0  0 1 0 0 0  0 0 1.1 0 0  0 0 0 1 0',
+    );
+    assert.equal(e.element('adjust-warmth-value').textContent, '−50');
+    assert.equal(e.element('adjust-brightness-value').textContent, '+40');
+    assert.equal(e.element('resetAdjustments').disabled, false);
+
+    e.element('undoButton').click();
+    assert.equal(stage.style['--adjust-filter'], 'brightness(1.2)');
+    assert.equal(e.element('adjust-warmth').value, '0');
+    e.element('undoButton').click();
+    assert.equal(stage.style['--adjust-filter'], 'none');
+    assert.equal(e.element('adjust-brightness').value, '0');
+    assert.equal(e.element('undoButton').disabled, true);
+    e.element('redoButton').click();
+    assert.equal(e.element('adjust-brightness').value, '40');
+    // Nothing is reprocessed or rebuilt.
+    assert.equal(e.croppers.length, 1);
+});
+
+test('Reset adjustments is one undo step, and the image Reset clears them too', async () => {
+    const e = await editedImage();
+    slide(e, 'sharpen', 50);
+    e.element('adjust-sharpen').dispatchEvent(new Event('change'));
+    assert.equal(e.element('adjustSharpenKernel').kernelMatrix, '0 -0.5 0 -0.5 3 -0.5 0 -0.5 0');
+    e.element('resetAdjustments').click();
+    assert.equal(e.element('adjust-sharpen').value, '0');
+    assert.equal(e.element('dropZone').style['--adjust-filter'], 'none');
+    e.element('undoButton').click();
+    assert.equal(e.element('adjust-sharpen').value, '50');
+    e.element('resetButton').click();
+    await e.decode();
+    assert.equal(e.element('adjust-sharpen').value, '0');
+    assert.equal(e.element('dropZone').style['--adjust-filter'], 'none');
+});
+
+test('each image keeps its own adjustments, and new uploads start without any', async () => {
+    const e = await editedImage('A.png');
+    slide(e, 'contrast', 30);
+    e.element('adjust-contrast').dispatchEvent(new Event('change'));
+    await e.select({ name: 'B.png' }, false);
+    await e.decode();
+    assert.equal(e.element('adjust-contrast').value, '0');
+    assert.equal(e.element('dropZone').style['--adjust-filter'], 'none');
+    e.element('batchImages').children[0].click();
+    await flush();
+    await e.decode();
+    assert.equal(e.element('adjust-contrast').value, '30');
+    assert.equal(e.element('dropZone').style['--adjust-filter'], 'contrast(1.15)');
+});
+
+test('downloading adjusts the picture only, with the background drawn underneath', async () => {
+    const e = await editedImage();
+    e.element('blackBg').click();
+    slide(e, 'brightness', 100);
+    e.element('adjust-brightness').dispatchEvent(new Event('change'));
+    // One opaque grey pixel and one transparent one.
+    e.cropper().croppedPixels = [100, 100, 100, 255, 0, 0, 0, 0];
+    e.download(false);
+    await flush();
+    const [image] = e.exports.at(-1).canvas.draws;
+    // The crop has no fill, so the black is not brightened with the picture.
+    const adjusted = image.source;
+    assert.equal(adjusted.draws[0].source.options.fillColor, 'transparent');
+    assert.deepEqual([...adjusted.putPixels], [150, 150, 150, 255, 0, 0, 0, 0]);
+});
+
+test('downloading without adjustments draws the crop unchanged', async () => {
+    const e = await editedImage();
+    e.element('blackBg').click();
+    e.download(false);
+    await flush();
+    const [image] = e.exports.at(-1).canvas.draws;
+    assert.equal(image.source.options.fillColor, '#000000');
+});
+
+test('dragging a two-way slider near the middle sticks at 0, but arrow keys step past it', async () => {
+    const e = await editedImage();
+    const buzzes = [];
+    e.window.navigator = { vibrate: (ms) => buzzes.push(ms) };
+    const slider = e.element('adjust-brightness');
+    slider.dispatchEvent(new Event('pointerdown'));
+    slide(e, 'brightness', 20);
+    assert.equal(slider.style['--from'], '0.5');
+    assert.equal(slider.style['--to'], '0.6');
+    assert.equal(slider.classList.contains('at-zero'), false);
+    slide(e, 'brightness', -3);
+    assert.equal(slider.value, '0');
+    assert.equal(e.element('adjust-brightness-value').textContent, '0');
+    assert.equal(slider.classList.contains('at-zero'), true);
+    assert.deepEqual(buzzes, [10]);
+    // Staying at 0 does not buzz again.
+    slide(e, 'brightness', 2);
+    assert.deepEqual(buzzes, [10]);
+    slide(e, 'brightness', -40);
+    assert.equal(slider.style['--from'], '0.3');
+    assert.equal(slider.style['--to'], '0.5');
+    e.window.dispatchEvent(new Event('pointerup'));
+    // Without a drag, a small value (such as one arrow-key step) is kept.
+    slide(e, 'brightness', 1);
+    assert.equal(slider.value, '1');
+    // Sharpen starts at 0, so it fills from the left and never snaps.
+    const sharpen = e.element('adjust-sharpen');
+    sharpen.dispatchEvent(new Event('pointerdown'));
+    slide(e, 'sharpen', 3);
+    assert.equal(sharpen.value, '3');
+    assert.equal(sharpen.style['--from'], '0');
+    assert.equal(sharpen.style['--to'], '0.03');
 });

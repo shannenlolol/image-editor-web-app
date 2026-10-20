@@ -1237,6 +1237,17 @@ input:focus-visible {
 .image-container.brushing .cropper-container {
   visibility: hidden;
 }
+/* The background, the picture (which the adjustments filter) and, on top,
+   the dimming and pointer input, stacked in that order. */
+.brush-backdrop,
+.brush-picture {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  pointer-events: none;
+}
 .brush-canvas {
   position: absolute;
   inset: 0;
@@ -1497,4 +1508,130 @@ body { color: var(--text); }
   .theme-toggle { grid-column: 2; grid-row: 1; justify-self: end; }
   .nav-right > .upload-btn { grid-column: 1; grid-row: 2; justify-self: start; }
   .download-control { grid-column: 2; grid-row: 2; justify-self: end; }
+}
+
+/* Adjust: sliders that preview through a CSS filter on the shown picture
+   only, so the background (fill or photo) is left as it is. */
+.image-container {
+  --adjust-filter: none;
+}
+.image-container .cropper-container img,
+.brush-picture {
+  filter: var(--adjust-filter);
+}
+.adjust-filters {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.adjust-row + .adjust-row {
+  margin-top: 8px;
+}
+.adjust-row output {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* The track fills from 0 to the thumb (from the middle for the sliders
+   that go both ways); --from and --to are set on the slider by the
+   controls, as fractions of the range. The thumb's centre travels 8 px in
+   from each end. */
+.adjust-track {
+  position: relative;
+}
+.adjust-track.centred::before {
+  /* The 0 mark: a small tick under the track, clear of the fill and the
+     thumb (which reaches 8 px below the middle), lit while at 0. */
+  content: "";
+  position: absolute;
+  top: calc(50% + 10px);
+  left: 50%;
+  width: 2px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--muted);
+  opacity: 0.6;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.adjust-track.centred:has(> .at-zero)::before {
+  background: #2b79dc;
+  opacity: 1;
+}
+.adjust-slider {
+  --from: 0;
+  --to: 0;
+  --fill-from: calc(8px + (100% - 16px) * var(--from));
+  --fill-to: calc(8px + (100% - 16px) * var(--to));
+  --track: linear-gradient(
+    to right,
+    var(--border) var(--fill-from),
+    #2b79dc var(--fill-from),
+    #2b79dc var(--fill-to),
+    var(--border) var(--fill-to)
+  );
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.adjust-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+}
+.adjust-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+}
+.adjust-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: #2b79dc;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+.adjust-slider::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: #2b79dc;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+.adjust-slider:focus-visible {
+  outline: 2px solid #2b79dc;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.reset-adjustments {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 16px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.reset-adjustments:hover:not(:disabled) {
+  background: var(--selected);
+}
+.reset-adjustments:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: default;
 }
