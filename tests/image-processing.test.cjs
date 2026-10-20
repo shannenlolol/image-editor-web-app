@@ -2046,28 +2046,22 @@ test('history keeps the most recent 50 steps', async () => {
     assert.equal(undone, 50);
 });
 
-function chooseExport(e, format, quality) {
+function chooseExport(e, format) {
     e.element('exportFormat').value = format;
     e.element('exportFormat').dispatchEvent(new Event('change'));
-    if (quality !== undefined) {
-        e.element('exportQuality').value = String(quality);
-        e.element('exportQuality').dispatchEvent(new Event('input'));
-    }
 }
 
-test('JPEG export uses the chosen quality and a white backdrop for transparency', async () => {
+test('JPEG export uses a fixed quality and a white backdrop for transparency', async () => {
     const e = editor();
     await e.select({ name: 'A.png' }, false);
     await e.decode();
-    chooseExport(e, 'image/jpeg', 70);
-    assert.equal(e.element('exportQualityRow').hidden, false);
+    chooseExport(e, 'image/jpeg');
     assert.equal(e.element('exportNote').hidden, false);
-    assert.equal(e.element('exportQualityValue').textContent, '70%');
     e.element('downloadMenuButton').click();
     e.element('downloadCurrent').click();
     const toBlob = e.exports.at(-1);
     assert.equal(toBlob.type, 'image/jpeg');
-    assert.equal(toBlob.quality, 0.7);
+    assert.equal(toBlob.quality, 0.9);
     // The edited canvas is drawn onto a fresh, white-filled canvas before encoding.
     const edited = toBlob.canvas.renderedFrom;
     assert.equal(e.canvases.includes(edited), true);
@@ -2078,16 +2072,15 @@ test('JPEG export uses the chosen quality and a white backdrop for transparency'
     assert.equal(e.downloads[0].filename, 'edited_A.jpg');
 });
 
-test('WebP export keeps transparency and PNG ignores the quality setting', async () => {
+test('WebP export keeps transparency and PNG is saved without a quality', async () => {
     for (const [format, filename, quality] of [
-        ['image/webp', 'edited_A.webp', 0.55],
+        ['image/webp', 'edited_A.webp', 0.9],
         ['image/png', 'edited_A.png', undefined],
     ]) {
         const e = editor();
         await e.select({ name: 'A.png' }, false);
         await e.decode();
-        chooseExport(e, format, 55);
-        assert.equal(e.element('exportQualityRow').hidden, format === 'image/png');
+        chooseExport(e, format);
         assert.equal(e.element('exportNote').hidden, true);
         e.element('downloadMenuButton').click();
         e.element('downloadCurrent').click();
@@ -2152,7 +2145,6 @@ test('arrow keys move between download actions but not inside the export options
         e.element('downloadMenu').dispatchEvent(event);
         return event.defaultPrevented;
     };
-    assert.equal(press(e.element('exportQuality')), false);
     assert.equal(press(e.element('exportFormat')), false);
     assert.equal(press(e.element('downloadCurrent')), true);
     assert.equal(e.element('downloadAll').focused, true);
