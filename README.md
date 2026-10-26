@@ -18,7 +18,9 @@
   <b><a href="https://image-editor.shannen-lee.com">Try it out</a></b> · <b><a href="docs/setup.md">Run your own</a></b>
 </p>
 
-![Main interface showing the upload area and editing tools](static/assets/screenshots/main_interface.webp)
+<a href="static/assets/screenshots/trailer.mp4"><img src="static/assets/screenshots/trailer_preview.webp" alt="Removing a background, then swapping it for a colour and a photo"></a>
+
+<p align="center"><a href="static/assets/screenshots/trailer.mp4">▶ Watch the full one-minute trailer</a></p>
 
 ## Features
 
